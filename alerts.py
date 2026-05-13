@@ -359,24 +359,24 @@ def check_savings_drift():
 
         txns = parse_stgeorge_csv(EVERYDAY_CSV)
 
-        # Get spending so far this month
-        month_start = now.date().replace(day=1)
-        month_txns  = [
+        # Use last 7 days average to project — avoids one-off weeks skewing it
+        today      = now.date()
+        week_start = today - datetime.timedelta(days=7)
+        week_txns  = [
             t for t in txns
-            if t["date"] >= month_start
+            if t["date"] >= week_start
             and t["debit"] > 0
             and "internet withdrawal" not in t["description"].lower()
+            and t["category"] not in ["Entertainment"]  # exclude one-off entertainment
         ]
-        spent_so_far = sum(t["debit"] for t in month_txns)
-
-        # Project full month spending
-        days_so_far    = now.day
-        days_in_month  = 30
-        projected      = (spent_so_far / days_so_far) * days_in_month
+        spent_7_days = sum(t["debit"] for t in week_txns)
+        # Project to monthly based on last 7 days (excluding entertainment blowouts)
+        projected = (spent_7_days / 7) * 30
 
         budget = 300.0
 
-        if projected <= budget * 1.2:  # Only alert if >20% over projected
+        # Only alert if projected to be 50%+ over budget (not 20%)
+        if projected <= budget * 1.5:
             return False
 
         over_by = projected - budget
