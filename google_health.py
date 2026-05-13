@@ -72,17 +72,50 @@ def setup_health_auth():
 
 
 def get_access_token():
-    """Returns a valid access token from health_token.json."""
-    if not HEALTH_TOKEN_FILE.exists():
-        raise RuntimeError("Run: python google_health.py --setup")
-    creds = Credentials.from_authorized_user_file(HEALTH_TOKEN_FILE, HEALTH_SCOPES)
+    """
+    Returns a valid access token.
+    Priority:
+      1. health_token.json file (local Mac)
+      2. GOOGLE_HEALTH_TOKEN environment variable (Render/production)
+    """
+    import os
+    import json as _json
+    import tempfile
+
+    token_data = None
+
+    if HEALTH_TOKEN_FILE.exists():
+        # Local — use the file directly
+        creds = Credentials.from_authorized_user_file(HEALTH_TOKEN_FILE, HEALTH_SCOPES)
+    else:
+        # Production — read from environment variable
+        token_json = os.environ.get("GOOGLE_HEALTH_TOKEN", "")
+        if not token_json:
+            raise RuntimeError(
+                "No health token found. Set GOOGLE_HEALTH_TOKEN env var or run --setup."
+            )
+        # Write to a temp file so Credentials can read it
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            f.write(token_json)
+            tmp_path = f.name
+        creds = Credentials.from_authorized_user_file(tmp_path, HEALTH_SCOPES)
+        import os as _os
+        _os.unlink(tmp_path)
+
     if not creds.valid:
         if creds.expired and creds.refresh_token:
             creds.refresh(GoogleRequest())
-            with open(HEALTH_TOKEN_FILE, "w") as f:
-                f.write(creds.to_json())
+            # Save refreshed token back if file exists
+            if HEALTH_TOKEN_FILE.exists():
+                with open(HEALTH_TOKEN_FILE, "w") as f:
+                    f.write(creds.to_json())
+            # Note: on Render, refreshed token isn't persisted — token will
+            # refresh again on next request (tokens last 1 hour)
         else:
-            raise RuntimeError("Token expired. Run: python google_health.py --setup")
+            raise RuntimeError(
+                "Health token expired. Re-run setup locally and update GOOGLE_HEALTH_TOKEN."
+            )
+
     return creds.token
 
 
