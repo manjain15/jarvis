@@ -1,0 +1,10 @@
+token.json
+health_token.json
+credentials.json
+finance/
+data/
+venv/
+__pycache__/
+*.pyc
+jarvis.log
+jarvis_evening.log
