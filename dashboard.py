@@ -28,6 +28,13 @@ import config
 # ── Import Jarvis modules ──────────────────────────────────────────────────────
 # Each import is wrapped — dashboard works even if a module fails
 
+# ── Memory system ────────────────────────────────────────────────────────────
+try:
+    from memory_system import load_memory
+    MEMORY_AVAILABLE = True
+except Exception:
+    MEMORY_AVAILABLE = False
+
 def safe_import(module_name, func_name):
     try:
         mod = __import__(module_name)
@@ -1048,6 +1055,14 @@ def ask():
             pass
 
     live_context = "\n".join(context_lines) if context_lines else "No live data available right now."
+
+    # Load memory
+    memory_text = ""
+    if MEMORY_AVAILABLE:
+        try:
+            memory_text = load_memory(days_back=14)
+        except Exception:
+            pass
 
     # Build the prompt
     prompt = f"""You are Jarvis — Manav's personal AI assistant. He is talking to you via voice through a Siri Shortcut.

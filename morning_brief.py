@@ -62,6 +62,27 @@ try:
 except Exception:
     FINANCE_AVAILABLE = False
 
+# ── Memory system (optional) ──────────────────────────────────────────────────
+try:
+    from memory_system import load_memory
+    MEMORY_AVAILABLE = True
+except Exception:
+    MEMORY_AVAILABLE = False
+
+# ── Weekly review (optional) ──────────────────────────────────────────────────
+try:
+    from weekly_review import run_weekly_review
+    WEEKLY_REVIEW_AVAILABLE = True
+except Exception:
+    WEEKLY_REVIEW_AVAILABLE = False
+
+# ── Job search (optional) ─────────────────────────────────────────────────────
+try:
+    from job_search import get_links_for_brief
+    JOB_SEARCH_AVAILABLE = True
+except Exception:
+    JOB_SEARCH_AVAILABLE = False
+
 # ── Hevy workout integration (optional) ──────────────────────────────────────
 try:
     from hevy import fetch_workout_data
@@ -262,7 +283,7 @@ def fetch_emails(creds, hours_back=18, max_emails=15):
 #   - Your recent emails
 #   - Exact instructions for how to write the brief
 
-def build_prompt(profile_text, events, emails, today_str, checkin_summary=None, fitbit_data=None, finance_data=None, hevy_data=None):
+def build_prompt(profile_text, events, emails, today_str, checkin_summary=None, fitbit_data=None, finance_data=None, hevy_data=None, memory_data=None, jobs_data=None):
     """
     Constructs the full prompt sent to Claude.
     Returns a string.
@@ -308,6 +329,20 @@ def build_prompt(profile_text, events, emails, today_str, checkin_summary=None, 
     else:
         hevy_section = "  No Hevy workout data available."
 
+    if memory_data:
+        memory_section = memory_data
+    else:
+        memory_section = "  No memory data yet — memory system will build over time."
+
+    # Append proposals to memory section if any exist
+    if proposals_text:
+        memory_section = memory_section + "\n\n" + proposals_text
+
+    if jobs_data:
+        jobs_section = jobs_data
+    else:
+        jobs_section = "  Job search not run today."
+
     prompt = f"""You are Jarvis — a highly intelligent personal assistant who knows this person deeply.
 You speak directly, concisely, and with genuine intelligence. No fluff. No filler.
 You push them toward their goals. You're the voice in their ear that keeps them sharp.
@@ -350,6 +385,16 @@ HEVY WORKOUT DATA:
 {hevy_section}
 
 ────────────────────────────
+JARVIS MEMORY (patterns and history):
+────────────────────────────
+{memory_section}
+
+────────────────────────────
+NEW JOB POSTINGS FOUND TODAY:
+────────────────────────────
+{jobs_section}
+
+────────────────────────────
 YOUR TASK — write their morning briefing:
 ────────────────────────────
 
@@ -371,7 +416,7 @@ Flag urgency clearly. If nothing urgent, say so.]
 they should do today? Be specific — not "work on your career" but something actionable.
 Rotate focus across: internship search, health, and their passion project.]
 
-<h3>💼 Internship pulse</h3>
+<h3>💼 Internship pulse & new roles</h3>
 [A direct, honest check-in on their internship goal. Have they applied recently?
 What should they do today — even one small step? Be direct, not gentle.]
 
@@ -379,7 +424,10 @@ What should they do today — even one small step? Be direct, not gentle.]
 [Use FITBIT DATA for sleep/HR/steps AND HEVY DATA for workout tracking. State actual sleep vs 7-8hr target, resting HR. Reference the HEVY DATA to confirm if they trained yesterday, any PBs hit, weekly consistency. State today's PPLRUL split. 4-5 lines max, direct and specific.]
 
 <h3>💰 Finance flag</h3>
-[Use the FINANCE DATA — be specific with real numbers. Call out: unusual transactions over $50, any category spending that seems high vs a ~$75/week budget (~$300/month total spending), savings progress vs $35k Jan 2027 goal, and the Pokemon reselling plan (keep asking until it exists). 3-4 lines max, direct.]
+[Use the FINANCE DATA — be specific with real numbers. Call out: unusual transactions over $50, any category spending that seems high vs a ~$75/week budget (~$300/month total spending), savings progress vs $35k Jan 2027 goal, and the Pokemon reselling plan (keep asking until it exists). 3-4 lines max, direct. ALSO: if today is Sunday, remind Manav to export his St. George CSV (everyday + 2 savings accounts) and drop them in the jarvis/finance/ folder to keep finance tracking accurate for the week ahead.]
+
+<h3>🔄 Profile updates</h3>
+[ONLY include this section if there are pending profile update proposals in the data. List each proposal concisely — section, what would change, and why. Tell Manav to run 'python update_profile.py' to approve. If no proposals, omit this section entirely.]
 
 <h3>⚡ Today's mindset</h3>
 [ONE sentence. Sharp. Motivating. Personalised to where they are right now.
@@ -504,6 +552,12 @@ def run_brief():
     today = datetime.datetime.now(tz)
     today_str = today.strftime("%A, %d %B %Y")
 
+    # On Sundays, run the weekly review instead of the standard brief
+    if today.weekday() == 6 and WEEKLY_REVIEW_AVAILABLE:
+        print(f"\n📋  Sunday detected — running weekly review instead of morning brief")
+        run_weekly_review()
+        return
+
     print(f"\n🤖  Jarvis morning brief — {today_str}")
     print("    ─────────────────────────────────")
 
@@ -547,6 +601,35 @@ def run_brief():
     else:
         print("⚠️   Fitbit not configured — skipping")
 
+    # Load job links (curated list — no API cost)
+    jobs_data = None
+    if JOB_SEARCH_AVAILABLE:
+        try:
+            from job_search import get_links_for_brief
+            jobs_data = get_links_for_brief()
+            print("🔍  Job links loaded")
+        except Exception as e:
+            print(f"⚠️   Job links failed: {e}")
+
+    # Load pending profile proposals
+    proposals_text = ""
+    try:
+        from update_profile import format_proposals_for_brief
+        proposals_text = format_proposals_for_brief()
+        if proposals_text:
+            print("💡  Pending profile proposals loaded")
+    except Exception:
+        pass
+
+    # Load memory
+    memory_data = None
+    if MEMORY_AVAILABLE:
+        try:
+            memory_data = load_memory(days_back=14)
+            print("🧠  Memory loaded")
+        except Exception as e:
+            print(f"⚠️   Memory load failed: {e}")
+
     # Fetch Hevy workout data
     hevy_data = None
     if HEVY_AVAILABLE and hasattr(config, "HEVY_API_KEY") and config.HEVY_API_KEY:
@@ -568,7 +651,7 @@ def run_brief():
 
     # Build prompt and call Claude
     print("🧠  Generating brief with Claude...")
-    prompt = build_prompt(profile_text, events, emails, today_str, checkin_summary, fitbit_data, finance_data, hevy_data)
+    prompt = build_prompt(profile_text, events, emails, today_str, checkin_summary, fitbit_data, finance_data, hevy_data, memory_data, jobs_data)
     brief  = generate_brief(prompt)
     print("✅  Brief generated")
 

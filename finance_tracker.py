@@ -187,7 +187,12 @@ def analyse_spending(transactions, days=7):
     today    = datetime.datetime.now(TIMEZONE).date()
     cutoff   = today - datetime.timedelta(days=days)
 
-    recent = [t for t in transactions if t["date"] >= cutoff and t["debit"] > 0]
+    recent = [
+        t for t in transactions
+        if t["date"] >= cutoff
+        and t["debit"] > 0
+        and "internet withdrawal" not in t["description"].lower()
+    ]
 
     # Category totals
     category_totals = {}
@@ -213,6 +218,7 @@ def analyse_spending(transactions, days=7):
         "big_transactions": big_transactions,
         "total_spend":      total_spend,
         "transaction_count": len(recent),
+        "transactions":     recent,
         "days":             days,
     }
 

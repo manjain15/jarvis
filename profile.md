@@ -118,7 +118,7 @@
 - **Relationship with money:** Saving aggressively toward a specific goal
 - **Goal:** University exchange in the US — January 2027
 - **Target amount:** $35,000
-- **Current savings rate:** ~$2,500 of earning $2,800/month
+- **Current savings rate:** ~$2,500 of earning $2,880/month
 - **Side hustle in progress:** Planning to invest a lump sum into Pokemon card reselling — should significantly boost savings. Plan not yet defined. Jarvis should ask about this regularly until there is a concrete plan.
 - **Jarvis should:** Remind me of the $35k target and January 2027 deadline. Flag if spending is unusually high. Prompt a monthly financial review. Ask about the Pokemon reselling plan until it exists.
 
@@ -126,9 +126,10 @@
 
 ## 6. Health & fitness baseline
 
-- **Current training:** Gym 5x/week — following PPLRUL split
+- **Current training:** Gym 5x/week — following PPLRUSHR split (Monday - Push, Tuesday - Pull, Wednesday - Legs, Thursday - Rest, Friday - Upper, Saturday - SHARMS (Shoulders + Arms), Sunday - Rest)
 - **Diet approach:** Intuitive eating currently. Vegetarian at home, non-veg outside. Prioritising protein. Open to tracking if plateau hits.
 - **Sleep target:** 7–8 hours
+  - **Sleep flag:** 2nd consecutive night significantly below target (last night: 4h 46m) — pattern confirmed, not a one-off.
 - **Current weight:** ~71kg
 - **Target:** ~65–67kg, lean physique with clear muscle definition, ~15% body fat
 - **Wearable / tracker:** Fitbit Versa 3
@@ -171,7 +172,7 @@ Every morning, Jarvis should cover these in order:
 3. **Email flags** — anything needing a reply today
 4. **Priority task** — the single most important thing toward my goals today (use holiday period to push hard on career)
 5. **Internship pulse** — applied anywhere recently? Follow-ups needed? What's happening with the Google mentor?
-6. **Health check** — sleep last night? Workout today — what's today's PPLRUL day?
+6. **Health check** — sleep last night? Workout today — what's today's PPLRUSHR day?
 7. **Finance flag** — anything unusual? How's the $35k target tracking? Any update on Pokemon reselling plan?
 8. **Motivation** — one sharp sentence to set the tone. Make it land.
 
@@ -187,7 +188,7 @@ Every morning, Jarvis should cover these in order:
 - Top career priority: land a tech internship (Google, Amazon, Canva, Anthropic, Optiver) in 6–12 months.
 - Currently being mentored by a Google employee — this relationship matters, keep it warm.
 - Confident in Python, C, JavaScript. Not actively building new skills right now — flag this as a gap.
-- Gym 5x/week (PPLRUL split). Currently ~71kg. Target: 65–67kg, ~15% body fat.
+- Gym 5x/week (PPLRUSHR split). Currently ~71kg. Target: 65–67kg, ~15% body fat.
 - Saving $35k for US exchange in January 2027. Income ~$2,880/month, saving ~95%.
 - Pokemon reselling plan not yet defined — ask about it until it exists.
 - Has a passion project to ship — hold me accountable.

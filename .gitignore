@@ -1,10 +1,23 @@
+# Secrets — never commit these
 token.json
 health_token.json
 credentials.json
+
+# Bank data — private
 finance/
 data/
+
+# Python
 venv/
 __pycache__/
 *.pyc
-jarvis.log
-jarvis_evening.log
+*.pyo
+
+# Logs
+*.log
+
+# Mac
+.DS_Store
+memory/
+profile_backup_*.md
+.DS_Store
