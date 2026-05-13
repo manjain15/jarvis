@@ -962,6 +962,128 @@ def health():
     return jsonify({"status": "ok"})
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# /ask — Voice interface endpoint
+# ─────────────────────────────────────────────────────────────────────────────
+# Accepts a question via POST or GET, sends to Claude with full context,
+# returns a short spoken-friendly answer.
+# Called by the Siri Shortcut on your iPhone.
+
+@app.route("/ask", methods=["GET", "POST"])
+def ask():
+    from flask import request
+    import anthropic as _anthropic
+
+    # Get the question
+    if request.method == "POST":
+        data     = request.get_json(silent=True) or {}
+        question = data.get("question", "") or request.form.get("question", "")
+    else:
+        question = request.args.get("q", "")
+
+    if not question:
+        return jsonify({"answer": "I didn't catch that. Try asking again."})
+
+    # Load profile
+    profile_text = ""
+    profile_path = SCRIPT_DIR / "profile.md"
+    if profile_path.exists():
+        profile_text = profile_path.read_text()
+
+    # Fetch live data to give Jarvis context
+    context_lines = []
+
+    # Hevy — today's split and last workout
+    if HEVY_DETAIL:
+        try:
+            from hevy import get_pplrul_day, fetch_recent_workouts, parse_workout_date
+            import datetime as _dt
+            tz    = pytz.timezone(config.TIMEZONE)
+            today = _dt.datetime.now(tz).date()
+            context_lines.append(f"Today's training split: {get_pplrul_day(today)}")
+            workouts = fetch_recent_workouts(page_size=3)
+            if workouts:
+                last    = workouts[0]
+                last_dt = parse_workout_date(last)
+                if last_dt:
+                    days_ago = (today - last_dt.date()).days
+                    context_lines.append(
+                        f"Last workout: {last.get('title','Workout')} "
+                        f"— {days_ago} day(s) ago ({last_dt.strftime('%a %d %b')})"
+                    )
+        except Exception:
+            pass
+
+    # Health — sleep and HR
+    if HEALTH_DETAIL:
+        try:
+            import datetime as _dt
+            tz        = pytz.timezone(config.TIMEZONE)
+            today     = _dt.datetime.now(tz).date()
+            yesterday = today - _dt.timedelta(days=1)
+            token     = get_access_token()
+            sleep = fetch_sleep(token, yesterday)
+            if sleep:
+                context_lines.append(
+                    f"Last night's sleep: {sleep['duration_str']} "
+                    f"({'below' if sleep['vs_7hr'] < 0 else 'above'} 7hr target by {abs(sleep['vs_7hr'])}m)"
+                )
+            hr = fetch_resting_hr(token, yesterday)
+            if hr and hr.get("resting_hr"):
+                context_lines.append(f"Resting HR yesterday: {hr['resting_hr']} bpm")
+        except Exception:
+            pass
+
+    # Finance — savings progress
+    if FINANCE_DETAIL:
+        try:
+            if EVERYDAY_CSV.exists():
+                savings = analyse_savings()
+                context_lines.append(
+                    f"Savings: ${savings['total']:,.2f} of $35,000 goal "
+                    f"({savings['pct']:.1f}%) — "
+                    f"{'on track' if savings['on_track'] else 'behind schedule'}"
+                )
+        except Exception:
+            pass
+
+    live_context = "\n".join(context_lines) if context_lines else "No live data available right now."
+
+    # Build the prompt
+    prompt = f"""You are Jarvis — Manav's personal AI assistant. He is talking to you via voice through a Siri Shortcut.
+
+IMPORTANT: Your response will be READ ALOUD by Siri. So:
+- Keep it SHORT — 2-4 sentences maximum
+- No bullet points, no markdown, no lists
+- Speak naturally, like a smart assistant talking to someone
+- Be direct and specific — use real numbers and facts when available
+- Don't say "Great question" or any filler — just answer
+
+MANAV'S PROFILE:
+{profile_text[:3000]}
+
+LIVE DATA RIGHT NOW:
+{live_context}
+
+QUESTION: {question}
+
+Answer in 2-4 sentences, spoken naturally, no formatting."""
+
+    # Call Claude
+    try:
+        client  = _anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
+        message = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=300,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        answer = message.content[0].text.strip()
+    except Exception as e:
+        answer = f"Sorry, I couldn't process that right now. Error: {str(e)[:100]}"
+
+    return jsonify({"answer": answer, "question": question})
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5555))
     debug = os.environ.get("DEBUG", "false").lower() == "true"
