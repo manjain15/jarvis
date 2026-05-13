@@ -98,6 +98,7 @@ def api_data():
             sleep = fetch_sleep(token, yesterday)
             if sleep:
                 data["health"]["sleep"] = {
+                    "duration_str": sleep["duration_str"],
                     "duration":     sleep["duration_str"],
                     "total_minutes": sleep["total_minutes"],
                     "vs_7hr":       sleep["vs_7hr"],
@@ -171,7 +172,7 @@ def api_data():
 
                 sessions_done     = len([d for d in week_days if d["trained"]])
                 sessions_expected = len([d for d in week_days
-                                        if not d["rest"] and not d["is_future"] and not d["is_today"]])
+                                        if not d["rest"] and not d["is_future"]])
 
                 data["workouts"] = {
                     "week_days":        week_days,
@@ -220,10 +221,32 @@ def api_data():
                 for cat in tracked:
                     amt = spending["category_totals"].get(cat, 0)
                     if amt > 0:
-                        categories.append({"name": cat, "amount": round(amt, 2)})
+                        cat_txns = [
+                            {
+                                "date": t["date"].strftime("%d %b"),
+                                "description": t["description"][:35],
+                                "amount": round(t["debit"], 2),
+                            }
+                            for t in spending.get("transactions", [])
+                            if t["category"] == cat
+                        ]
+                        categories.append({
+                            "name": cat,
+                            "amount": round(amt, 2),
+                            "transactions": cat_txns,
+                        })
                 other = spending["category_totals"].get("Other", 0)
+                other_txns = [
+                    {
+                        "date": t["date"].strftime("%d %b"),
+                        "description": t["description"][:35],
+                        "amount": round(t["debit"], 2),
+                    }
+                    for t in spending.get("transactions", [])
+                    if t["category"] == "Other"
+                ]
                 if other > 0:
-                    categories.append({"name": "Other", "amount": round(other, 2)})
+                    categories.append({"name": "Other", "amount": round(other, 2), "transactions": other_txns})
 
                 data["finance"] = {
                     "total_spend":   round(spending["total_spend"], 2),
@@ -380,9 +403,9 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
   @media (min-width: 900px) {
     .grid {
       grid-template-columns: 1fr 1fr;
-      max-width: 960px;
+      max-width: 100%;
       gap: 16px;
-      padding: 20px;
+      padding: 20px 24px;
     }
     .card.wide { grid-column: 1 / -1; }
   }
@@ -642,6 +665,28 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
     transition: width 0.8s ease;
   }
 
+  /* ── Transaction rows ── */
+  .txn-list {
+    margin-top: 8px;
+    border-top: 1px solid var(--border);
+    padding-top: 6px;
+  }
+  .txn-row {
+    display: grid;
+    grid-template-columns: 42px 1fr auto;
+    gap: 8px;
+    padding: 5px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.03);
+    font-size: 11px;
+    align-items: center;
+  }
+  .txn-row:last-child { border-bottom: none; }
+  .txn-date  { color: var(--muted); font-family: var(--font-mono); }
+  .txn-desc  { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .txn-amt   { color: var(--accent); font-family: var(--font-mono); text-align: right; white-space: nowrap; }
+  .txn-empty { color: var(--muted); font-size: 11px; padding: 4px 0; }
+  .txn-toggle { transition: transform 0.2s; }
+
   /* ── Loading ── */
   .loading {
     display: flex;
@@ -693,6 +738,15 @@ const CATEGORY_COLORS = {
   "Transport":       "#ff9f43",
   "Other":           "#4a6070",
 };
+
+function toggleTxns(id) {
+  const el = document.getElementById(id);
+  const toggle = document.getElementById('toggle-' + id);
+  if (!el) return;
+  const isOpen = el.style.display !== 'none';
+  el.style.display = isOpen ? 'none' : 'block';
+  if (toggle) toggle.textContent = isOpen ? '▼' : '▲';
+}
 
 async function loadData() {
   document.getElementById("updatedAt").textContent = "refreshing...";
@@ -765,16 +819,30 @@ function render(d) {
   // Spending bars
   const cats   = f.categories || [];
   const maxAmt = Math.max(...cats.map(c => c.amount), 1);
-  const spendBars = cats.map(c => {
+  const spendBars = cats.map((c, idx) => {
     const pct = (c.amount / maxAmt * 100);
     const col = CATEGORY_COLORS[c.name] || "#4a6070";
-    return `<div class="spend-bar-row">
+    const txnId = `txn-${idx}`;
+    const txnRows = (c.transactions || []).map(t =>
+      `<div class="txn-row">
+        <span class="txn-date">${t.date}</span>
+        <span class="txn-desc">${t.description}</span>
+        <span class="txn-amt">$${fmt(t.amount)}</span>
+      </div>`
+    ).join("");
+    return `<div class="spend-bar-row" onclick="toggleTxns('${txnId}')" style="cursor:pointer">
       <div class="spend-bar-header">
         <span class="spend-bar-name">${c.name}</span>
-        <span class="spend-bar-amt">$${fmt(c.amount)}</span>
+        <div style="display:flex;align-items:center;gap:8px">
+          <span class="spend-bar-amt">$${fmt(c.amount)}</span>
+          <span class="txn-toggle" id="toggle-${txnId}" style="color:var(--muted);font-size:10px">▼</span>
+        </div>
       </div>
       <div class="spend-bar-track">
         <div class="spend-bar-fill" style="width:${pct}%;background:${col}"></div>
+      </div>
+      <div class="txn-list" id="${txnId}" style="display:none">
+        ${txnRows || '<div class="txn-empty">No transactions</div>'}
       </div>
     </div>`;
   }).join("");
@@ -791,7 +859,7 @@ function render(d) {
     <!-- Sleep -->
     <div class="card">
       <div class="card-label">Sleep</div>
-      <div class="sleep-main ${sleepClass}">${sleep.duration_str || "—"}</div>
+      <div class="sleep-main ${sleepClass}">${sleep.duration || sleep.duration_str || (sm > 0 ? Math.floor(sm/60)+"h "+(sm%60)+"m" : "—")}</div>
       <div class="sleep-sub">${
         sleep.vs_7hr != null
           ? (sleep.vs_7hr >= 0
