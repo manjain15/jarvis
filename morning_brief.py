@@ -94,6 +94,13 @@ try:
 except Exception:
     HEVY_AVAILABLE = False
 
+# ── Pokemon reselling tracker (optional) ─────────────────────────────────────
+try:
+    from pokemon_tracker import get_pokemon_summary
+    POKEMON_AVAILABLE = True
+except Exception:
+    POKEMON_AVAILABLE = False
+
 # ── Hevy progressive overload (optional) ─────────────────────────────────────
 try:
     from hevy_overload import get_overload_summary
@@ -294,7 +301,7 @@ def fetch_emails(creds, hours_back=18, max_emails=15):
 #   - Your recent emails
 #   - Exact instructions for how to write the brief
 
-def build_prompt(profile_text, events, emails, today_str, checkin_summary=None, fitbit_data=None, finance_data=None, hevy_data=None, memory_data=None, jobs_data=None, overload_data=None):
+def build_prompt(profile_text, events, emails, today_str, checkin_summary=None, fitbit_data=None, finance_data=None, hevy_data=None, memory_data=None, jobs_data=None, overload_data=None, pokemon_data=None):
     """
     Constructs the full prompt sent to Claude.
     Returns a string.
@@ -359,6 +366,11 @@ def build_prompt(profile_text, events, emails, today_str, checkin_summary=None, 
     else:
         overload_section = "  No overload data available."
 
+    if pokemon_data:
+        pokemon_section = pokemon_data
+    else:
+        pokemon_section = "  No inventory file found — copy Excel to jarvis/pokemon/inventory.xlsx" 
+
     prompt = f"""You are Jarvis — a highly intelligent personal assistant who knows this person deeply.
 You speak directly, concisely, and with genuine intelligence. No fluff. No filler.
 You push them toward their goals. You're the voice in their ear that keeps them sharp.
@@ -412,8 +424,13 @@ NEW JOB POSTINGS FOUND TODAY:
 
 ────────────────────────────
 PROGRESSIVE OVERLOAD ANALYSIS:
-────────────────────────────
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 {overload_section}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+POKEMON / RESELLING P&L:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+{pokemon_section}
 
 ────────────────────────────
 YOUR TASK — write their morning briefing:
@@ -672,7 +689,7 @@ def run_brief():
 
     # Build prompt and call Claude
     print("🧠  Generating brief with Claude...")
-    prompt = build_prompt(profile_text, events, emails, today_str, checkin_summary, fitbit_data, finance_data, hevy_data, memory_data, jobs_data, overload_data)
+    prompt = build_prompt(profile_text, events, emails, today_str, checkin_summary, fitbit_data, finance_data, hevy_data, memory_data, jobs_data, overload_data, pokemon_data)
     brief  = generate_brief(prompt)
     print("✅  Brief generated")
 
