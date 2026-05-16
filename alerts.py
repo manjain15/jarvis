@@ -23,6 +23,10 @@ SCHEDULE (add to crontab):
   0 18 * * * cd /Users/manavjain/jarvis && venv/bin/python alerts.py >> jarvis_alerts.log 2>&1
   0 20 * * * cd /Users/manavjain/jarvis && venv/bin/python alerts.py >> jarvis_alerts.log 2>&1
 """
+import warnings
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+
 
 import json
 import datetime
@@ -404,6 +408,83 @@ def check_savings_drift():
 
 # ── Run all alerts ────────────────────────────────────────────────────────────
 
+
+
+def check_pattern_alerts():
+    """
+    Memory-aware proactive alerts. Uses Mem0 to detect patterns
+    across recent history and surfaces actionable nudges.
+    Runs once daily (morning check).
+    """
+    tz  = TIMEZONE
+    now = datetime.datetime.now(tz)
+
+    # Only run in morning (7am-11am)
+    if not (7 <= now.hour < 11):
+        return False
+
+    fired = False
+
+    try:
+        from jarvis_mem0 import search_memories
+        import anthropic
+
+        # Search for recent patterns across key life areas
+        pattern_queries = [
+            ("internship applications", "career", 14),
+            ("sleep deprivation poor sleep", "health", 7),
+            ("training missed skipped", "fitness", 7),
+            ("savings spending budget", "finance", 14),
+            ("pokemon reselling inventory", "reselling", 21),
+        ]
+
+        insights = []
+        for query, area, days in pattern_queries:
+            result = search_memories(query, limit=3)
+            if result:
+                insights.append(f"[{area.upper()}] {result}")
+
+        if not insights:
+            return False
+
+        # Ask Claude to identify the most important pattern to flag today
+        client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
+        prompt = f"""You are Jarvis, Manav's personal AI assistant.
+Review these memory snippets and identify the SINGLE most important pattern
+that needs Manav's attention today. Be specific and actionable.
+
+Today: {now.strftime('%A, %d %B %Y')}
+
+MEMORY PATTERNS:
+{chr(10).join(insights[:5])}
+
+Rules:
+- Only flag something genuinely concerning or time-sensitive
+- If everything looks fine, respond with just: CLEAR
+- Otherwise respond with a short push notification (max 100 chars)
+  Format: ALERT: <title> | <message>
+  Example: ALERT: Internship drought | 12 days since last application. Term starts soon."""
+
+        resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=100,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        text = resp.content[0].text.strip()
+
+        if text.startswith("ALERT:"):
+            parts   = text.replace("ALERT:", "").strip().split("|")
+            title   = parts[0].strip() if parts else "Jarvis"
+            message = parts[1].strip() if len(parts) > 1 else text
+            send_notification(title, message, priority="default", tags=["brain"])
+            print(f"    🧠  Pattern alert: {title} — {message}")
+            fired = True
+
+    except Exception as e:
+        print(f"    ⚠️   Pattern alert check failed: {e}")
+
+    return fired
+
 def run_all_alerts():
     """Runs all alert checks. Called by cron 3x daily."""
     tz  = TIMEZONE
@@ -422,6 +503,9 @@ def run_all_alerts():
         fired += 1
 
     if check_savings_drift():
+        fired += 1
+
+    if check_pattern_alerts():
         fired += 1
 
     if fired == 0:

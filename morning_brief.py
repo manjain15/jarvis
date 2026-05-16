@@ -24,6 +24,10 @@ FIRST-TIME SETUP:
   4. Run: python morning_brief.py --test    (sends a test brief right now)
   5. Schedule it: python morning_brief.py --schedule  (sets up 7am daily)
 """
+import warnings
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+
 
 import os
 import sys

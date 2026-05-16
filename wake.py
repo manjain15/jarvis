@@ -16,6 +16,10 @@ RUN:
   Press Cmd+Shift+J — orb shifts to listening.
   Speak your question. Jarvis thinks then speaks back.
 """
+import warnings
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+
 
 import time
 import wave
@@ -49,6 +53,17 @@ except ImportError:
     print("pip install openai-whisper")
 
 import config
+
+# ── Conversation session ──────────────────────────────────────────────────────
+# Holds the last N turns so Jarvis remembers context within a session.
+# Resets after 10 minutes of inactivity or when you say "clear" / "reset".
+import time as _time
+_session = {
+    "history":    [],    # list of {role, content}
+    "last_active": 0,    # timestamp of last interaction
+}
+SESSION_TIMEOUT = 600    # 10 minutes
+MAX_TURNS       = 8      # keep last 8 turns
 
 # ── Config ────────────────────────────────────────────────────────────────────
 DASHBOARD      = "http://localhost:5555"
@@ -106,21 +121,83 @@ def speak(text):
 
 
 def ask_jarvis(question):
-    import datetime
+    import datetime, anthropic
     import pytz
     tz  = pytz.timezone("Australia/Sydney")
     now = datetime.datetime.now(tz)
-    # Prepend date context so Claude always knows the current time
-    dated_question = f"[Today is {now.strftime('%A, %d %B %Y, %-I:%M %p AEST')}] {question}"
+
+    # Reset session if inactive too long or user says reset
+    if question.lower().strip() in ("clear", "reset", "start over", "new conversation"):
+        _session["history"] = []
+        return "Conversation cleared."
+
+    elapsed = _time.time() - _session["last_active"]
+    if elapsed > SESSION_TIMEOUT:
+        _session["history"] = []
+
+    # Build dated question
+    dated_q = f"[Today is {now.strftime('%A, %d %B %Y, %-I:%M %p AEST')}] {question}"
+
+    # Try multi-turn Claude directly (richer than /ask endpoint)
     try:
-        r = requests.get(
-            f"{DASHBOARD}/ask",
-            params={"q": dated_question, "voice": "true"},
-            timeout=30
+        # Load context for first message in session
+        if not _session["history"]:
+            profile_text = (SCRIPT_DIR / "profile.md").read_text() if (SCRIPT_DIR / "profile.md").exists() else ""
+            mem_text = ""
+            try:
+                from jarvis_mem0 import load_memory_for_prompt
+                mem_text = load_memory_for_prompt(query=question)
+            except Exception:
+                pass
+            system = (
+                "You are Jarvis, Manav's personal AI assistant. "
+                "Brilliant, direct, concise for voice. "
+                "Your response will be spoken aloud — no markdown, no bullets, "
+                "speak in natural sentences. 2-4 sentences unless it needs more.\n\n"
+                f"PROFILE:\n{profile_text[:1500]}\n\n"
+                f"MEMORY:\n{mem_text[:800] if mem_text else 'Building.'}"
+            )
+        else:
+            system = (
+                "You are Jarvis, Manav's personal AI assistant. "
+                "Respond concisely for voice — natural sentences, no markdown. "
+                "Maintain full context of this conversation."
+            )
+
+        history = list(_session["history"])
+        history.append({"role": "user", "content": dated_q})
+
+        client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
+        resp   = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=300,
+            system=system,
+            messages=history,
         )
-        return r.json().get("answer", "")
+        answer = resp.content[0].text.strip()
+
+        # Update session
+        _session["history"].append({"role": "user",      "content": question})
+        _session["history"].append({"role": "assistant", "content": answer})
+        if len(_session["history"]) > MAX_TURNS * 2:
+            _session["history"] = _session["history"][-MAX_TURNS * 2:]
+        _session["last_active"] = _time.time()
+
+        return answer
+
     except Exception as e:
-        return f"Could not reach Jarvis: {e}"
+        # Fallback to /ask endpoint
+        try:
+            r = requests.get(
+                f"{DASHBOARD}/ask",
+                params={"q": dated_q, "voice": "true"},
+                timeout=30
+            )
+            return r.json().get("answer", "")
+        except Exception as e2:
+            return f"Could not reach Jarvis: {e2}"
+
+SCRIPT_DIR = Path(__file__).parent
 
 
 def record_until_silence():
