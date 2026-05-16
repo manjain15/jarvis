@@ -12,6 +12,16 @@ SCHEDULE (already handled if you add to crontab):
 OR run standalone:
   python weekly_review.py
 """
+import warnings
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+
+try:
+    from weekly_intelligence import get_intelligence_html
+    INTELLIGENCE_AVAILABLE = True
+except Exception:
+    INTELLIGENCE_AVAILABLE = False
+
 
 import json
 import datetime
@@ -460,6 +470,16 @@ def run_weekly_review():
     review_html = generate_weekly_review(health, workouts, finance, memory, job_links)
 
     print("📤  Sending review...")
+    # Append intelligence report to the review
+    if INTELLIGENCE_AVAILABLE:
+        try:
+            print("🧠  Generating intelligence report...")
+            intelligence_html = get_intelligence_html()
+            review_html = review_html + intelligence_html
+            print("✅  Intelligence report added")
+        except Exception as e:
+            print(f"⚠️   Intelligence report failed: {e}")
+
     send_weekly_review(review_html, week_label)
 
     print(f"\n✅  Weekly review sent. Check your inbox.\n")
