@@ -31,3 +31,5 @@ HEVY_API_KEY= "***REMOVED***"
 # Get the ntfy app (free, App Store), create a private channel name
 # Make it unique and hard to guess — e.g. "***REMOVED***"
 NTFY_CHANNEL = "***REMOVED***"  # paste your channel name here
+
+OPENAI_API_KEY = "***REMOVED***"

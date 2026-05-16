@@ -1099,32 +1099,6 @@ Answer in 2-4 sentences, spoken naturally, no formatting."""
     return jsonify({"answer": answer, "question": question})
 
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Orb state — shared between wake.py and the orb page
-# ─────────────────────────────────────────────────────────────────────────────
-_orb_state = {"state": "idle", "transcript": "", "response": ""}
-
-
-@app.route("/state", methods=["GET", "POST"])
-def orb_state():
-    from flask import request as _req
-    global _orb_state
-    if _req.method == "POST":
-        data = _req.get_json(silent=True) or {}
-        _orb_state.update(data)
-        return jsonify({"ok": True})
-    return jsonify(_orb_state)
-
-
-@app.route("/orb")
-def orb():
-    orb_path = SCRIPT_DIR / "orb.html"
-    if orb_path.exists():
-        return orb_path.read_text()
-    return "<h1>orb.html not found in jarvis folder</h1>", 404
-
-
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5555))
     debug = os.environ.get("DEBUG", "false").lower() == "true"

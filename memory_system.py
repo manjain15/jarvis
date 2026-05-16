@@ -103,6 +103,33 @@ def load_todays_data():
         except Exception:
             pass
 
+    # Voice interactions (from Siri/dashboard)
+    voice_log_path = SCRIPT_DIR / "data" / "voice_log.jsonl"
+    if voice_log_path.exists():
+        try:
+            import datetime as _dt
+            tz       = pytz.timezone(config.TIMEZONE)
+            today_str = today.strftime("%Y-%m-%d")
+            today_interactions = []
+            with open(voice_log_path) as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    entry = json.loads(line)
+                    if entry.get("date") == today_str:
+                        today_interactions.append(
+                            f"  [{entry['time']}] Q: {entry['question']}"
+                            f"\n          A: {entry['answer'][:150]}"
+                        )
+            if today_interactions:
+                sections.append(
+                    "VOICE INTERACTIONS TODAY (Siri/Jarvis conversations):\n"
+                    + "\n".join(today_interactions)
+                )
+        except Exception as e:
+            pass
+
     # Google Health
     try:
         from google_health import fetch_sleep, fetch_resting_hr, fetch_steps, get_access_token

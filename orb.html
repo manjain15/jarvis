@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Jarvis</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&display=swap');
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:100%;height:100%;background:#040608;display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:'Space Mono',monospace;overflow:hidden}
+canvas{position:absolute;top:0;left:0;pointer-events:none}
+.ui{position:relative;z-index:10;display:flex;flex-direction:column;align-items:center}
+.status{font-size:10px;letter-spacing:0.22em;text-transform:uppercase;margin-top:190px;transition:color 0.8s;color:rgba(0,229,255,0.35)}
+.transcript{font-size:11px;letter-spacing:0.08em;color:rgba(255,255,255,0.5);margin-top:10px;max-width:400px;text-align:center;min-height:16px;transition:opacity 0.4s}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div class="ui">
+  <div class="status" id="st">idle · say hey jarvis</div>
+  <div class="transcript" id="tr"></div>
+</div>
+<script>
+var C=document.getElementById('c');
+var ctx=C.getContext('2d');
+var W,H,cx,cy;
+function resize(){W=C.width=window.innerWidth;H=C.height=window.innerHeight;cx=W/2;cy=H/2-40;}
+resize();window.addEventListener('resize',resize);
+
+var STATE='idle';var t=0;
+var p={breathAmp:0.018,breathSpeed:0.012,coreGlow:0.4,ringSpeed:0.004,ringOpacity:0.18,particleSpeed:0.3,waveAmp:0,thinkSwirl:0,noiseAmp:0,r:0,g:200,b:255,tr:0,tg:200,tb:255};
+var targets={
+  idle:{breathAmp:0.018,breathSpeed:0.012,coreGlow:0.35,ringSpeed:0.004,ringOpacity:0.15,waveAmp:0,thinkSwirl:0,noiseAmp:0,tr:0,tg:200,tb:255,particleSpeed:0.3},
+  listen:{breathAmp:0.035,breathSpeed:0.022,coreGlow:0.75,ringSpeed:0.009,ringOpacity:0.35,waveAmp:28,thinkSwirl:0,noiseAmp:0,tr:0,tg:229,tb:255,particleSpeed:0.9},
+  think:{breathAmp:0.012,breathSpeed:0.028,coreGlow:0.9,ringSpeed:0.018,ringOpacity:0.28,waveAmp:0,thinkSwirl:1,noiseAmp:0,tr:123,tg:97,tb:255,particleSpeed:1.4},
+  speak:{breathAmp:0.055,breathSpeed:0.019,coreGlow:0.85,ringSpeed:0.007,ringOpacity:0.3,waveAmp:38,thinkSwirl:0,noiseAmp:0.7,tr:0,tg:255,tb:136,particleSpeed:1.1}
+};
+
+var parts=[];
+function initParticles(){parts=[];for(var i=0;i<80;i++){var a=Math.random()*Math.PI*2,d=55+Math.random()*80;parts.push({angle:a,dist:d,baseDist:d,speed:(Math.random()-0.5)*0.003,size:Math.random()*1.8+0.4,opacity:Math.random()*0.5+0.1,phase:Math.random()*Math.PI*2});}}
+initParticles();
+
+function lerp(a,b,k){return a+(b-a)*k;}
+function lerpP(key,k){p[key]=lerp(p[key],targets[STATE][key],k);}
+function noise(x){return Math.sin(x*1.7+3.1)*0.5+Math.sin(x*3.3+1.2)*0.3+Math.sin(x*7.1+0.4)*0.2;}
+
+function drawRing(r,alpha,wobble,phase,color){
+  ctx.beginPath();var steps=120;
+  for(var i=0;i<=steps;i++){var a=(i/steps)*Math.PI*2,w=wobble>0?wobble*noise(a*2+phase+t*0.3):0,rr=r+w,x=cx+Math.cos(a)*rr,y=cy+Math.sin(a)*rr*(0.92+w*0.002);i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);}
+  ctx.closePath();ctx.strokeStyle='rgba('+color+','+alpha+')';ctx.lineWidth=0.8;ctx.stroke();
+}
+
+function drawCore(scale,glowAlpha,color){
+  var cr=36*scale;
+  for(var i=5;i>0;i--){var g=ctx.createRadialGradient(cx,cy,0,cx,cy,cr*i*0.7);g.addColorStop(0,'rgba('+color+','+(glowAlpha*0.06/i)+')');g.addColorStop(1,'rgba('+color+',0)');ctx.beginPath();ctx.arc(cx,cy,cr*i*0.7,0,Math.PI*2);ctx.fillStyle=g;ctx.fill();}
+  var grad=ctx.createRadialGradient(cx-cr*0.3,cy-cr*0.3,0,cx,cy,cr);grad.addColorStop(0,'rgba(255,255,255,0.12)');grad.addColorStop(0.3,'rgba('+color+',0.18)');grad.addColorStop(1,'rgba(0,0,0,0.95)');
+  ctx.beginPath();ctx.arc(cx,cy,cr,0,Math.PI*2);ctx.fillStyle=grad;ctx.fill();
+  ctx.strokeStyle='rgba('+color+','+(glowAlpha*0.8)+')';ctx.lineWidth=0.8;ctx.stroke();
+  var ig=ctx.createRadialGradient(cx,cy,0,cx,cy,cr*0.35);ig.addColorStop(0,'rgba('+color+',1)');ig.addColorStop(0.5,'rgba('+color+',0.5)');ig.addColorStop(1,'rgba('+color+',0)');
+  ctx.beginPath();ctx.arc(cx,cy,cr*0.35,0,Math.PI*2);ctx.fillStyle=ig;ctx.fill();
+}
+
+function drawWaveArc(amp,freq,color,alpha){
+  if(amp<1)return;
+  for(var side=0;side<2;side++){ctx.beginPath();var startA=side===0?Math.PI*0.85:Math.PI*1.15,endA=side===0?Math.PI*2.15:Math.PI*-0.15,steps=80;
+    for(var i=0;i<=steps;i++){var frac=i/steps,a=startA+(endA-startA)*frac,env=Math.sin(frac*Math.PI),w=Math.sin(frac*Math.PI*freq*3+t*8)*amp*env*(0.8+noise(frac*4+t)*0.2),rr=58+w*(side===0?1:-1),x=cx+Math.cos(a)*rr,y=cy+Math.sin(a)*rr;i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);}
+    ctx.strokeStyle='rgba('+color+','+alpha+')';ctx.lineWidth=1.2;ctx.stroke();}
+}
+
+function drawParticles(color,speed){
+  parts.forEach(function(pt){pt.angle+=pt.speed*speed*(1+p.thinkSwirl*2);var pulse=1+Math.sin(t*1.2+pt.phase)*0.15,dist=pt.baseDist*pulse,x=cx+Math.cos(pt.angle)*dist,y=cy+Math.sin(pt.angle)*dist*0.88,alpha=pt.opacity*(0.5+p.coreGlow*0.5);ctx.beginPath();ctx.arc(x,y,pt.size,0,Math.PI*2);ctx.fillStyle='rgba('+color+','+alpha+')';ctx.fill();});
+}
+
+var swirlArcs=[0,1,2,3].map(function(i){return{phase:i*Math.PI/2,speed:0.02+i*0.004};});
+function drawThinkSwirl(alpha,color){
+  if(alpha<0.01)return;
+  swirlArcs.forEach(function(arc){arc.phase+=arc.speed;ctx.beginPath();ctx.arc(cx,cy,62+Math.sin(arc.phase*0.7)*4,arc.phase,arc.phase+Math.PI*0.45);ctx.strokeStyle='rgba('+color+','+alpha*0.6+')';ctx.lineWidth=1.5;ctx.stroke();});
+}
+
+var orbitAngles=[0,0.7,1.5],orbitSpeeds=[0.004,0.006,0.003],orbitRadii=[88,108,130];
+function drawOrbitRings(color){
+  orbitAngles=orbitAngles.map(function(a,i){return a+orbitSpeeds[i]*p.ringSpeed*250*(i%2===0?1:-1);});
+  orbitRadii.forEach(function(r,i){
+    var wobble=STATE==='speak'?p.noiseAmp*4*noise(t+i):0;
+    drawRing(r+wobble,p.ringOpacity*(1-i*0.06),STATE==='think'?2:0.5,orbitAngles[i],color);
+    var nx=cx+Math.cos(orbitAngles[i])*r,ny=cy+Math.sin(orbitAngles[i])*r;
+    ctx.beginPath();ctx.arc(nx,ny,2.5,0,Math.PI*2);ctx.fillStyle='rgba('+color+','+(p.ringOpacity*2)+')';ctx.fill();
+    var ng=ctx.createRadialGradient(nx,ny,0,nx,ny,8);ng.addColorStop(0,'rgba('+color+',0.3)');ng.addColorStop(1,'rgba('+color+',0)');ctx.beginPath();ctx.arc(nx,ny,8,0,Math.PI*2);ctx.fillStyle=ng;ctx.fill();
+  });
+}
+
+var scanAngle=0;
+function drawScan(color){
+  scanAngle+=0.008*p.ringSpeed*250;
+  ctx.save();ctx.translate(cx,cy);ctx.rotate(scanAngle);
+  var sg=ctx.createLinearGradient(0,0,130,0);sg.addColorStop(0,'rgba('+color+',0.15)');sg.addColorStop(1,'rgba('+color+',0)');
+  ctx.beginPath();ctx.moveTo(0,0);ctx.arc(0,0,130,-0.35,0.35);ctx.closePath();ctx.fillStyle=sg;ctx.fill();
+  ctx.restore();
+}
+
+function applyState(s){
+  STATE=s;
+  var labels={idle:'idle · say hey jarvis',listen:'listening...',think:'processing...',speak:'speaking...'};
+  var colors={idle:'rgba(0,229,255,0.35)',listen:'rgba(0,229,255,0.9)',think:'rgba(123,97,255,0.9)',speak:'rgba(0,255,136,0.9)'};
+  document.getElementById('st').textContent=labels[s];
+  document.getElementById('st').style.color=colors[s];
+}
+
+// Poll /state endpoint every 200ms
+function pollState(){
+  fetch('/state').then(function(r){return r.json();}).then(function(d){
+    if(d.state!==STATE) applyState(d.state);
+    if(d.transcript) document.getElementById('tr').textContent=d.transcript;
+    if(d.response)   document.getElementById('tr').textContent=d.response;
+  }).catch(function(){});
+  setTimeout(pollState,200);
+}
+pollState();
+
+function frame(){
+  requestAnimationFrame(frame);t+=0.016;
+  var k=0.04;
+  lerpP('breathAmp',k);lerpP('breathSpeed',k);lerpP('coreGlow',k*1.5);lerpP('ringSpeed',k);
+  lerpP('ringOpacity',k);lerpP('waveAmp',k*2);lerpP('thinkSwirl',k*1.5);lerpP('noiseAmp',k);lerpP('particleSpeed',k);
+  p.r=lerp(p.r,p.tr,k*0.8);p.g=lerp(p.g,p.tg,k*0.8);p.b=lerp(p.b,p.tb,k*0.8);
+  var breath=1+Math.sin(t*p.breathSpeed*60)*p.breathAmp;
+  if(STATE==='speak') breath+=noise(t*3)*p.noiseAmp*0.012;
+  var col=Math.round(p.r)+','+Math.round(p.g)+','+Math.round(p.b);
+  ctx.clearRect(0,0,W,H);
+  var vig=ctx.createRadialGradient(cx,cy,60,cx,cy,300);vig.addColorStop(0,'rgba(0,0,0,0)');vig.addColorStop(1,'rgba(4,6,8,0.7)');ctx.fillStyle=vig;ctx.fillRect(0,0,W,H);
+  ctx.save();ctx.translate(cx,cy);ctx.scale(breath,breath);ctx.translate(-cx,-cy);
+  drawOrbitRings(col);drawScan(col);drawParticles(col,p.particleSpeed);
+  drawThinkSwirl(p.thinkSwirl,col);drawWaveArc(p.waveAmp,3+noise(t)*1,col,0.7);drawCore(1,p.coreGlow,col);
+  ctx.restore();
+}
+frame();
+</script>
+</body>
+</html>
