@@ -62,6 +62,46 @@ WEEKLY_BUDGET     = 75.00
 # Each rule is a list of keywords (case-insensitive) found in the description.
 # First match wins.
 
+# ── Income source rules ──────────────────────────────────────────────────────
+# Keywords in credit transaction descriptions → income category
+
+INCOME_RULES = [
+    # Automation/PropWealth salary — main job
+    ("Automation",  ["propwealth", "prop wealth"]),
+    # Tutoring — Axis Education platform
+    ("Tutoring",    ["axis ed", "axis education", "tutoring", "tutor"]),
+    # Pokemon / marketplace sales
+    ("Pokemon Sales", ["ivan christian", "celestino"]),
+    # Note: internet deposits and sct deposits are excluded above as own-account transfers
+    # Refunds and one-offs
+    ("Refund",      ["refund", "cashback", "rebate", "exchange application"]),
+    # Friends splitting bills — NOT income, filter these out
+    # These are identified by being small Osko deposits from friends
+]
+
+# Names/keywords that indicate friend bill-splits (not income)
+# Osko deposits from these are excluded from income
+FRIEND_KEYWORDS = [
+    "sagar ahuja", "adesh sunkari", "nilesh banga", "banga n",
+    "samuel selvadoss", "sai satpute", "muhunthan", "michael",
+    "paint sprayer",  # one-off reimbursement
+    "banga", "grace", "mother s day", "bangas",
+    "exchange application fee",  # deposit from own savings
+]
+
+def is_friend_split(description):
+    desc_lower = description.lower()
+    return any(kw in desc_lower for kw in FRIEND_KEYWORDS)
+
+def categorise_income(description):
+    desc_lower = description.lower()
+    for category, keywords in INCOME_RULES:
+        for kw in keywords:
+            if kw in desc_lower:
+                return category
+    return "Other"
+
+
 CATEGORY_RULES = [
     ("Food & dining", [
         "woolworths", "coles", "aldi", "iga", "harris farm", "costco",
@@ -84,6 +124,7 @@ CATEGORY_RULES = [
     ]),
     ("Shopping", [
         "amazon", "ebay", "kmart", "target", "big w", "myer", "david jones",
+        "apple.com/bill", "apple.com",
         "uniqlo", "h&m", "zara", "cotton on", "glue store",
         "jb hi-fi", "officeworks", "apple store", "harvey norman",
         "chemist warehouse", "priceline", "pharmacy",
@@ -94,6 +135,10 @@ CATEGORY_RULES = [
         "golf", "muirfield", "tennis", "swimming", "aquatic",
         "sport", "leisure", "recreation", "fitness", "yoga", "pilates",
         "surfing", "climbing", "crossfit",
+    ]),
+    ("Education", [
+        "unsw", "university", "tafe", "tuition", "textbook", "course fee",
+        "student fee", "enrolment",
     ]),
     ("Transport", [
         "uber ", "ola ", "didi ", "taxi",
@@ -271,6 +316,53 @@ def is_monthly_review_day():
 
 # ── Main summary function ─────────────────────────────────────────────────────
 
+def analyse_income(transactions, days=30):
+    """
+    Analyses income (credits) from the everyday account over the last N days.
+    Returns dict with income by source and total.
+    """
+    import datetime as _dt
+    import pytz as _pytz
+    tz      = _pytz.timezone(config.TIMEZONE)
+    today   = _dt.datetime.now(tz).date()
+    cutoff  = today - _dt.timedelta(days=days)
+
+    # Credits only, excluding internal transfers and friend bill-splits
+    income_txns = [
+        t for t in transactions
+        if t["date"] >= cutoff
+        and t["credit"] > 0
+        and "internet withdrawal" not in t["description"].lower()
+        and "osko withdrawal" not in t["description"].lower()
+        and "from 0000" not in t["description"].lower()   # own savings transfers
+        and "internet deposit" not in t["description"].lower()  # own account transfers
+        and "sct deposit" not in t["description"].lower()       # own account transfers
+        and not is_friend_split(t["description"])
+    ]
+
+    # Categorise each credit
+    by_source = {}
+    for t in income_txns:
+        cat = categorise_income(t["description"])
+        if cat not in by_source:
+            by_source[cat] = {"total": 0, "transactions": []}
+        by_source[cat]["total"] += t["credit"]
+        by_source[cat]["transactions"].append({
+            "date":        t["date"].strftime("%d %b"),
+            "description": t["description"][:35],
+            "amount":      round(t["credit"], 2),
+        })
+
+    total = sum(v["total"] for v in by_source.values())
+
+    return {
+        "by_source":   by_source,
+        "total":       round(total, 2),
+        "days":        days,
+        "txn_count":   len(income_txns),
+    }
+
+
 def get_finance_summary():
     """
     Returns a formatted finance summary string for the morning brief.
@@ -291,7 +383,7 @@ def get_finance_summary():
 
     lines.append("SPENDING (last 7 days):")
 
-    tracked_cats = ["Food & dining", "Entertainment", "Shopping", "Sport & leisure"]
+    tracked_cats = ["Food & dining", "Entertainment", "Shopping", "Sport & leisure", "Education", "Subscriptions"]
     for cat in tracked_cats:
         amt = spending["category_totals"].get(cat, 0)
         if amt > 0:
@@ -314,6 +406,31 @@ def get_finance_summary():
             lines.append(f"    • {t['date'].strftime('%d %b')}  ${t['debit']:.2f}  {t['description'][:40]}")
 
     lines.append("")
+
+    # ── Income tracking ───────────────────────────────────────────────────────
+    income = analyse_income(everyday_txns, days=30)
+    if income["total"] > 0:
+        lines.append("INCOME (last 30 days):")
+        for source, data in sorted(income["by_source"].items(), key=lambda x: -x[1]["total"]):
+            if source not in ("Transfer In", "Other", "Refund") and data["total"] > 0:
+                lines.append(f"  {source:<18} ${data['total']:.2f}")
+        if "Transfer In" in income["by_source"]:
+            ti = income["by_source"]["Transfer In"]["total"]
+            if ti > 0:
+                lines.append(f"  {'Transfers In':<18} ${ti:.2f}  (internal)")
+        lines.append(f"  {'Total income':<18} ${income['total']:.2f}")
+        import datetime as _dt, pytz as _ptz
+        _tz    = _ptz.timezone(config.TIMEZONE)
+        _today = _dt.datetime.now(_tz)
+        _days_elapsed   = _today.day
+        _days_in_month  = 30
+        expected        = 2880.0
+        prorated        = expected * (_days_elapsed / _days_in_month)
+        if income["total"] < prorated * 0.75:
+            lines.append(f"  ⚠ Behind pace — ${income['total']:.0f} earned, ~${prorated:.0f} expected by day {_days_elapsed}")
+        else:
+            lines.append(f"  ✓ On pace — ${income['total']:.0f} of ~${expected:.0f} expected this month")
+        lines.append("")
 
     # ── Savings progress ──────────────────────────────────────────────────────
     savings = analyse_savings()

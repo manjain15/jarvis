@@ -105,12 +105,12 @@ def load_todays_data():
 
     # Voice interactions (from Siri/dashboard)
     voice_log_path = SCRIPT_DIR / "data" / "voice_log.jsonl"
+    today_interactions = []
     if voice_log_path.exists():
         try:
             import datetime as _dt
-            tz       = pytz.timezone(config.TIMEZONE)
+            tz        = pytz.timezone(config.TIMEZONE)
             today_str = today.strftime("%Y-%m-%d")
-            today_interactions = []
             with open(voice_log_path) as f:
                 for line in f:
                     line = line.strip()
@@ -118,15 +118,13 @@ def load_todays_data():
                         continue
                     entry = json.loads(line)
                     if entry.get("date") == today_str:
-                        today_interactions.append(
+                        today_interactions.append(entry)
+                        sections.append(
                             f"  [{entry['time']}] Q: {entry['question']}"
                             f"\n          A: {entry['answer'][:150]}"
                         )
             if today_interactions:
-                sections.append(
-                    "VOICE INTERACTIONS TODAY (Siri/Jarvis conversations):\n"
-                    + "\n".join(today_interactions)
-                )
+                sections.insert(0, "VOICE INTERACTIONS TODAY (Siri/Jarvis conversations):")
         except Exception as e:
             pass
 
@@ -448,6 +446,29 @@ def run_memory_update():
                 print("⏭   No new Mem0 memories extracted")
         except Exception as e:
             print(f"⚠️   Mem0 update failed: {e}")
+
+        # Feed voice interactions into Mem0 separately
+        # Each Q&A is added individually so Mem0 can extract specific facts
+        if today_interactions:
+            print(f"🎙️   Adding {len(today_interactions)} voice interaction(s) to Mem0...")
+            try:
+                from jarvis_mem0 import add_memory
+                added_voice = 0
+                for interaction in today_interactions:
+                    q = interaction.get("question", "")
+                    a = interaction.get("answer", "")
+                    if q and len(q) > 5:
+                        text = f"Manav asked Jarvis: '{q}'. Jarvis responded: '{a[:200]}'"
+                        result = add_memory(text, metadata={
+                            "source": "voice_interaction",
+                            "date":   interaction.get("date", today.strftime("%Y-%m-%d")),
+                            "time":   interaction.get("time", ""),
+                        })
+                        if result.get("results"):
+                            added_voice += 1
+                print(f"✅  {added_voice} voice interaction(s) added to Mem0")
+            except Exception as e:
+                print(f"⚠️   Voice memory failed: {e}")
 
     print("\n✅  Memory update complete.\n")
 

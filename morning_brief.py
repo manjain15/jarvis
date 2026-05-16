@@ -94,6 +94,13 @@ try:
 except Exception:
     HEVY_AVAILABLE = False
 
+# ── Hevy progressive overload (optional) ─────────────────────────────────────
+try:
+    from hevy_overload import get_overload_summary
+    OVERLOAD_AVAILABLE = True
+except Exception:
+    OVERLOAD_AVAILABLE = False
+
 # Google OAuth scopes — these are the exact permissions we request
 # Gmail: read emails + send the brief back to you
 # Calendar: read your events
@@ -287,7 +294,7 @@ def fetch_emails(creds, hours_back=18, max_emails=15):
 #   - Your recent emails
 #   - Exact instructions for how to write the brief
 
-def build_prompt(profile_text, events, emails, today_str, checkin_summary=None, fitbit_data=None, finance_data=None, hevy_data=None, memory_data=None, jobs_data=None):
+def build_prompt(profile_text, events, emails, today_str, checkin_summary=None, fitbit_data=None, finance_data=None, hevy_data=None, memory_data=None, jobs_data=None, overload_data=None):
     """
     Constructs the full prompt sent to Claude.
     Returns a string.
@@ -347,6 +354,11 @@ def build_prompt(profile_text, events, emails, today_str, checkin_summary=None, 
     else:
         jobs_section = "  Job search not run today."
 
+    if overload_data:
+        overload_section = overload_data
+    else:
+        overload_section = "  No overload data available."
+
     prompt = f"""You are Jarvis — a highly intelligent personal assistant who knows this person deeply.
 You speak directly, concisely, and with genuine intelligence. No fluff. No filler.
 You push them toward their goals. You're the voice in their ear that keeps them sharp.
@@ -399,6 +411,11 @@ NEW JOB POSTINGS FOUND TODAY:
 {jobs_section}
 
 ────────────────────────────
+PROGRESSIVE OVERLOAD ANALYSIS:
+────────────────────────────
+{overload_section}
+
+────────────────────────────
 YOUR TASK — write their morning briefing:
 ────────────────────────────
 
@@ -425,7 +442,7 @@ Rotate focus across: internship search, health, and their passion project.]
 What should they do today — even one small step? Be direct, not gentle.]
 
 <h3>💪 Health check</h3>
-[Use FITBIT DATA for sleep/HR/steps AND HEVY DATA for workout tracking. State actual sleep vs 7-8hr target, resting HR. Reference the HEVY DATA to confirm if they trained yesterday, any PBs hit, weekly consistency. State today's PPLRUL split. 4-5 lines max, direct and specific.]
+[Use FITBIT DATA for sleep/HR/steps AND HEVY DATA for workout tracking AND PROGRESSIVE OVERLOAD data. State actual sleep vs 7-8hr target, resting HR. Confirm if they trained yesterday, any PBs. State today's split. If any lifts are stalling, flag the most important one. 5-6 lines max, direct and specific.]
 
 <h3>💰 Finance flag</h3>
 [Use the FINANCE DATA — be specific with real numbers. Call out: unusual transactions over $50, any category spending that seems high vs a ~$75/week budget (~$300/month total spending), savings progress vs $35k Jan 2027 goal, and the Pokemon reselling plan (keep asking until it exists). 3-4 lines max, direct. ALSO: if today is Sunday, remind Manav to export his St. George CSV (everyday + 2 savings accounts) and drop them in the jarvis/finance/ folder to keep finance tracking accurate for the week ahead.]
@@ -655,7 +672,7 @@ def run_brief():
 
     # Build prompt and call Claude
     print("🧠  Generating brief with Claude...")
-    prompt = build_prompt(profile_text, events, emails, today_str, checkin_summary, fitbit_data, finance_data, hevy_data, memory_data, jobs_data)
+    prompt = build_prompt(profile_text, events, emails, today_str, checkin_summary, fitbit_data, finance_data, hevy_data, memory_data, jobs_data, overload_data)
     brief  = generate_brief(prompt)
     print("✅  Brief generated")
 
