@@ -17,9 +17,19 @@ Sent as a separate email section after the weekly review.
 CRON: Already covered by morning_brief.py Sunday 7am run.
 """
 
+import os
 import warnings
+import logging
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=DeprecationWarning)
+warnings.filterwarnings("ignore", message=".*spaCy.*")
+warnings.filterwarnings("ignore", message=".*unauthenticated.*")
+logging.getLogger("transformers").setLevel(logging.ERROR)
+logging.getLogger("sentence_transformers").setLevel(logging.ERROR)
+logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+os.environ["TRANSFORMERS_VERBOSITY"] = "error" 
 
 import datetime
 import json
