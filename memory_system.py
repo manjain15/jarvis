@@ -376,6 +376,12 @@ def load_memory(days_back=14):
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def run_memory_update():
+    # Try to import Mem0 integration
+    try:
+        from jarvis_mem0 import add_memories_from_data
+        MEM0_AVAILABLE = True
+    except ImportError:
+        MEM0_AVAILABLE = False
     """
     Full memory update cycle. Run nightly at 10pm.
     """
@@ -430,6 +436,18 @@ def run_memory_update():
         print(f"✅  Semantic memory updated")
     else:
         print(f"⏭   No semantic updates needed")
+
+    # Feed today's data into Mem0 vector memory
+    if MEM0_AVAILABLE:
+        print("🧠  Updating Mem0 vector memory...")
+        try:
+            added = add_memories_from_data(today_data, episodic_entry)
+            if added:
+                print(f"✅  {added} Mem0 memory operation(s)")
+            else:
+                print("⏭   No new Mem0 memories extracted")
+        except Exception as e:
+            print(f"⚠️   Mem0 update failed: {e}")
 
     print("\n✅  Memory update complete.\n")
 

@@ -64,10 +64,14 @@ except Exception:
 
 # ── Memory system (optional) ──────────────────────────────────────────────────
 try:
-    from memory_system import load_memory
+    from jarvis_mem0 import load_memory_for_prompt as load_memory
     MEMORY_AVAILABLE = True
 except Exception:
-    MEMORY_AVAILABLE = False
+    try:
+        from memory_system import load_memory
+        MEMORY_AVAILABLE = True
+    except Exception:
+        MEMORY_AVAILABLE = False
 
 # ── Weekly review (optional) ──────────────────────────────────────────────────
 try:
