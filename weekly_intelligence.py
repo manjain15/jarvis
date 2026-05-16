@@ -74,7 +74,7 @@ def collect_training_trend(weeks=4):
         from hevy import fetch_recent_workouts, parse_workout_date
         tz         = TIMEZONE
         today      = datetime.datetime.now(tz).date()
-        workouts   = fetch_recent_workouts(page_size=50)
+        workouts   = fetch_recent_workouts(page_size=10)
 
         weekly = defaultdict(int)
         for w in workouts:
@@ -142,20 +142,27 @@ def collect_finance_trend(weeks=4):
 def collect_mem0_insights():
     """Pulls recent memories across key life areas for trend analysis."""
     try:
-        from jarvis_mem0 import search_memories
+        from jarvis_mem0 import _get_memory
+        from jarvis_mem0 import USER_ID
+        m = _get_memory()  # load once, reuse for all queries
+
         areas = {
-            "career":    "internship application job interview",
-            "health":    "sleep tired fatigue energy",
-            "fitness":   "gym training workout missed",
-            "finance":   "spending savings budget money",
-            "pokemon":   "pokemon reselling sold inventory",
-            "academic":  "UNSW uni assignment exam",
+            "career":   "internship application job interview",
+            "health":   "sleep tired fatigue energy",
+            "fitness":  "gym training workout missed",
+            "finance":  "spending savings budget money",
+            "pokemon":  "pokemon reselling sold inventory",
+            "academic": "UNSW uni assignment exam",
         }
         results = {}
         for area, query in areas.items():
-            mem = search_memories(query, limit=3)
-            if mem:
-                results[area] = mem
+            try:
+                r    = m.search(query, filters={"user_id": USER_ID}, limit=3)
+                mems = [x["memory"] for x in r.get("results", []) if x.get("score", 0) > 0.5]
+                if mems:
+                    results[area] = " | ".join(mems)
+            except Exception:
+                pass
         return results
     except Exception as e:
         return {}
