@@ -94,6 +94,13 @@ try:
 except Exception:
     HEVY_AVAILABLE = False
 
+# ── Calendar & task management (optional) ────────────────────────────────────
+try:
+    from jarvis_calendar import get_tasks_summary, generate_daily_plan
+    CALENDAR_WRITE = True
+except Exception:
+    CALENDAR_WRITE = False
+
 # ── Pokemon reselling tracker (optional) ─────────────────────────────────────
 try:
     from pokemon_tracker import get_pokemon_summary
@@ -115,6 +122,8 @@ SCOPES = [
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/gmail.send",
     "https://www.googleapis.com/auth/calendar.readonly",
+    "https://www.googleapis.com/auth/calendar.events",  # write: create/update events
+    "https://www.googleapis.com/auth/tasks",             # Google Tasks read/write
     # Note: Google Health scopes are in a SEPARATE token (health_token.json)
     # due to a Google API bug — mixing health + consumer scopes causes 403 errors
 ]
@@ -301,7 +310,7 @@ def fetch_emails(creds, hours_back=18, max_emails=15):
 #   - Your recent emails
 #   - Exact instructions for how to write the brief
 
-def build_prompt(profile_text, events, emails, today_str, checkin_summary=None, fitbit_data=None, finance_data=None, hevy_data=None, memory_data=None, jobs_data=None, overload_data=None, pokemon_data=None):
+def build_prompt(profile_text, events, emails, today_str, checkin_summary=None, fitbit_data=None, finance_data=None, hevy_data=None, memory_data=None, jobs_data=None, overload_data=None, pokemon_data=None, tasks_data=None, daily_plan=None):
     """
     Constructs the full prompt sent to Claude.
     Returns a string.
@@ -369,7 +378,10 @@ def build_prompt(profile_text, events, emails, today_str, checkin_summary=None, 
     if pokemon_data:
         pokemon_section = pokemon_data
     else:
-        pokemon_section = "  No inventory file found — copy Excel to jarvis/pokemon/inventory.xlsx" 
+        pokemon_section = "  No inventory file found — copy Excel to jarvis/pokemon/inventory.xlsx"
+
+    tasks_section = tasks_data or "  Google Tasks not connected."
+    plan_section  = daily_plan or "  Could not generate plan today." 
 
     prompt = f"""You are Jarvis — a highly intelligent personal assistant who knows this person deeply.
 You speak directly, concisely, and with genuine intelligence. No fluff. No filler.
@@ -431,6 +443,16 @@ PROGRESSIVE OVERLOAD ANALYSIS:
 POKEMON / RESELLING P&L:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 {pokemon_section}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PENDING TASKS:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+{tasks_section}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TODAY'S PLAN:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+{plan_section}
 
 ────────────────────────────
 YOUR TASK — write their morning briefing:
@@ -689,7 +711,7 @@ def run_brief():
 
     # Build prompt and call Claude
     print("🧠  Generating brief with Claude...")
-    prompt = build_prompt(profile_text, events, emails, today_str, checkin_summary, fitbit_data, finance_data, hevy_data, memory_data, jobs_data, overload_data, pokemon_data)
+    prompt = build_prompt(profile_text, events, emails, today_str, checkin_summary, fitbit_data, finance_data, hevy_data, memory_data, jobs_data, overload_data, pokemon_data, tasks_data, daily_plan)
     brief  = generate_brief(prompt)
     print("✅  Brief generated")
 

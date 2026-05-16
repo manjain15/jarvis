@@ -60,12 +60,12 @@ def get_google_credentials():
 # ── Data aggregation ──────────────────────────────────────────────────────────
 
 def get_week_dates():
-    """Returns the start and end of the past week (Mon-Sun)."""
+    """Returns the start and end of the current week (Mon-Sun)."""
     tz    = TIMEZONE
     today = datetime.datetime.now(tz).date()
-    # Last Monday
+    # This Monday
     days_since_monday = today.weekday()
-    week_start = today - datetime.timedelta(days=days_since_monday + 7)
+    week_start = today - datetime.timedelta(days=days_since_monday)
     week_end   = week_start + datetime.timedelta(days=6)
     return week_start, week_end
 
@@ -350,7 +350,13 @@ No corporate speak. No "Great work!" Start directly with the HTML."""
 
 def send_weekly_review(review_html, week_label):
     """Sends the weekly review via Gmail."""
-    creds   = get_google_credentials()
+    from google.oauth2.credentials import Credentials as _Creds
+    from google.auth.transport.requests import Request as _Req
+    _token_file = SCRIPT_DIR / "token.json"
+    creds = _Creds.from_authorized_user_file(str(_token_file), SCOPES)
+    if creds.expired and creds.refresh_token:
+        creds.refresh(_Req())
+        open(_token_file, "w").write(creds.to_json())
     service = build("gmail", "v1", credentials=creds)
 
     import ssl, certifi

@@ -221,6 +221,67 @@ def on_release(key):
         _stop_rec = True
 
 
+def handle_intent(question):
+    """
+    Detects and handles calendar/task intents directly.
+    Returns answer string if handled, None if should fall through to /ask.
+    """
+    q = question.lower().strip()
+
+    # Calendar creation intents
+    calendar_triggers = ["block ", "schedule ", "add to calendar", "create event",
+                         "set a reminder", "put on my calendar", "book "]
+    if any(t in q for t in calendar_triggers):
+        try:
+            from jarvis_calendar import parse_and_create_event
+            return parse_and_create_event(question)
+        except Exception as e:
+            return f"I couldn't create that event: {e}"
+
+    # Task creation intents
+    task_triggers = ["add a task", "add task", "remind me to", "don't let me forget",
+                     "note to self", "add to my list", "make a note"]
+    if any(t in q for t in task_triggers):
+        try:
+            from jarvis_calendar import add_task
+            # Extract task title — remove the trigger phrase
+            title = question
+            for t in ["add a task to ", "add task to ", "add a task ", "remind me to ",
+                      "don't let me forget to ", "note to self ", "add to my list "]:
+                title = title.replace(t, "").replace(t.title(), "")
+            title = title.strip().rstrip(".")
+            add_task(title)
+            return f"Got it. Added to your tasks: '{title}'"
+        except Exception as e:
+            return f"I couldn't add that task: {e}"
+
+    # What's on my calendar
+    if any(t in q for t in ["what's on my calendar", "what do i have today",
+                              "what's on today", "my schedule today"]):
+        try:
+            from jarvis_calendar import get_today_events
+            events = get_today_events()
+            if not events:
+                return "Your calendar is clear today."
+            lines = ["Here's what you have today:"]
+            for e in events:
+                lines.append(f"{e['time']}: {e['title']}")
+            return " ".join(lines)
+        except Exception as e:
+            return None
+
+    # Plan my day
+    if any(t in q for t in ["plan my day", "what should i do today",
+                              "day plan", "plan today"]):
+        try:
+            from jarvis_calendar import generate_daily_plan
+            return generate_daily_plan()
+        except Exception as e:
+            return None
+
+    return None  # fall through to /ask
+
+
 def run():
     if not all([AUDIO_OK, KEYBOARD_OK, WHISPER_OK]):
         print("\nMissing dependencies. Run:")
