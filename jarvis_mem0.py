@@ -1,3 +1,20 @@
+import os
+import sys
+import logging
+
+# Must be set before any HuggingFace imports
+os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+os.environ["TRANSFORMERS_VERBOSITY"]        = "error"
+os.environ["TOKENIZERS_PARALLELISM"]        = "false"
+os.environ["HF_HUB_VERBOSITY"]             = "error"
+
+import warnings
+warnings.filterwarnings("ignore")
+logging.getLogger("transformers").setLevel(logging.ERROR)
+logging.getLogger("sentence_transformers").setLevel(logging.ERROR)
+logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
+logging.disable(logging.WARNING)
+
 """
 Jarvis — Mem0 Vector Memory
 ============================
@@ -72,8 +89,11 @@ def _get_mem0_config():
 
 def _get_memory():
     """Returns initialised Mem0 Memory instance."""
+    import io, contextlib
     from mem0 import Memory
-    return Memory.from_config(_get_mem0_config())
+    # Suppress spaCy and other init noise
+    with contextlib.redirect_stderr(io.StringIO()):
+        return Memory.from_config(_get_mem0_config())
 
 
 # ── Core operations ───────────────────────────────────────────────────────────
