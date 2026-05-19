@@ -174,7 +174,28 @@ Return ONLY the JSON array, nothing else."""
         response = re.sub(r"^```json\s*", "", response)
         response = re.sub(r"\s*```$", "", response)
 
-        proposals = json.loads(response)
+        # Strip markdown code blocks if Claude wrapped the JSON
+        clean = response.strip()
+        if '```' in clean:
+            for part in clean.split('```'):
+                part = part.strip().lstrip('json').strip()
+                if part.startswith('[') or part.startswith('{'):
+                    clean = part
+                    break
+        # Try parsing, fall back to empty list on any error
+        try:
+            proposals = json.loads(clean)
+        except json.JSONDecodeError:
+            # Try to extract just the array portion
+            import re
+            match = re.search(r'\[.*\]', clean, re.DOTALL)
+            if match:
+                try:
+                    proposals = json.loads(match.group())
+                except Exception:
+                    proposals = []
+            else:
+                proposals = []
         return proposals if isinstance(proposals, list) else []
     except Exception as e:
         print(f"⚠️   Proposal generation failed: {e}")

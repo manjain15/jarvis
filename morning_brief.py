@@ -713,6 +713,16 @@ def run_brief():
         except Exception as e:
             print(f"⚠️   Finance fetch failed: {e}")
 
+    # Default all optional variables that may not have been set
+    if 'overload_data' not in dir():
+        overload_data = None
+    if 'pokemon_data' not in dir():
+        pokemon_data = None
+    if 'tasks_data' not in dir():
+        tasks_data = None
+    if 'daily_plan' not in dir():
+        daily_plan = None
+
     # Build prompt and call Claude
     print("🧠  Generating brief with Claude...")
     prompt = build_prompt(profile_text, events, emails, today_str, checkin_summary, fitbit_data, finance_data, hevy_data, memory_data, jobs_data, overload_data, pokemon_data, tasks_data, daily_plan, proposals_text)

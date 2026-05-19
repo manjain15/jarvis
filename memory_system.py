@@ -447,7 +447,8 @@ def run_memory_update():
         except Exception as e:
             print(f"⚠️   Mem0 update failed: {e}")
 
-        # Feed voice interactions into Mem0 separately
+        today_interactions = []
+    # Feed voice interactions into Mem0 separately
         # Each Q&A is added individually so Mem0 can extract specific facts
         if today_interactions:
             print(f"🎙️   Adding {len(today_interactions)} voice interaction(s) to Mem0...")
