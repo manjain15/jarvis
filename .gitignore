@@ -1,4 +1,6 @@
 # Secrets — never commit these
+.env
+.env.local
 token.json
 health_token.json
 credentials.json

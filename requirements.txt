@@ -66,6 +66,7 @@ pyobjc-framework-Cocoa==12.1
 pyobjc-framework-CoreText==12.1
 pyobjc-framework-Quartz==12.1
 pyparsing==3.3.2
+python-dotenv==1.2.2
 pytz==2026.2
 regex==2026.5.9
 requests==2.34.0
