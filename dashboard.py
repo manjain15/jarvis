@@ -62,7 +62,7 @@ except Exception:
 try:
     from finance_tracker import (
         parse_stgeorge_csv, analyse_spending, analyse_savings,
-        EVERYDAY_CSV, SAVINGS1_CSV, SAVINGS2_CSV
+        EVERYDAY_CSV, SAVINGS1_CSV, INVESTING_CSV
     )
     FINANCE_DETAIL = True
 except Exception:

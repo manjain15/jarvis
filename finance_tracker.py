@@ -8,8 +8,8 @@ HOW IT WORKS:
   1. You export CSVs from St. George Internet Banking (takes 30 seconds)
   2. Drop them in the jarvis/finance/ folder:
        finance/everyday.csv   — your spending account
-       finance/savings1.csv   — general savings
-       finance/savings2.csv   — trip/exchange savings
+       finance/savings1.csv   — main savings (US exchange Jan 2027 goal)
+       finance/investing.csv  — reselling working capital (separate P&L)
   3. Morning brief calls get_finance_summary() and injects the result
 
 CSV FORMAT (St. George):
@@ -41,9 +41,9 @@ import config
 
 SCRIPT_DIR   = Path(__file__).parent
 FINANCE_DIR  = SCRIPT_DIR / "finance"
-EVERYDAY_CSV = FINANCE_DIR / "everyday.csv"
-SAVINGS1_CSV = FINANCE_DIR / "savings1.csv"
-SAVINGS2_CSV = FINANCE_DIR / "savings2.csv"
+EVERYDAY_CSV  = FINANCE_DIR / "everyday.csv"
+SAVINGS1_CSV  = FINANCE_DIR / "savings1.csv"
+INVESTING_CSV = FINANCE_DIR / "investing.csv"
 
 FINANCE_DIR.mkdir(exist_ok=True)
 
@@ -272,13 +272,12 @@ def analyse_spending(transactions, days=7):
 
 def analyse_savings():
     """
-    Reads balances from both savings CSVs and calculates
-    progress toward the $35k goal.
+    Reads main savings balance and calculates progress toward the $35k goal.
+    Investing account is reselling capital — tracked separately in analyse_reselling.
     """
     bal1 = get_latest_balance(SAVINGS1_CSV)
-    bal2 = get_latest_balance(SAVINGS2_CSV)
 
-    total = (bal1 or 0) + (bal2 or 0)
+    total = bal1 or 0
     remaining = max(0, SAVINGS_GOAL - total)
     pct = (total / SAVINGS_GOAL * 100) if SAVINGS_GOAL > 0 else 0
 
@@ -295,7 +294,6 @@ def analyse_savings():
 
     return {
         "balance1":        bal1,
-        "balance2":        bal2,
         "total":           total,
         "goal":            SAVINGS_GOAL,
         "remaining":       remaining,
@@ -304,6 +302,44 @@ def analyse_savings():
         "projected_date":  projected_date,
         "days_to_deadline": days_to_deadline,
         "monthly_savings": monthly_savings,
+    }
+
+
+# ── Reselling P&L ─────────────────────────────────────────────────────────────
+
+def analyse_reselling(days=30):
+    """
+    Analyses the investing account as reselling working capital.
+    Debits = inventory purchases (capital deployed).
+    Credits = sale proceeds (capital returned).
+    Excludes internal transfers (lump-sum top-ups from savings).
+    """
+    txns = parse_stgeorge_csv(INVESTING_CSV)
+    today  = datetime.datetime.now(TIMEZONE).date()
+    cutoff = today - datetime.timedelta(days=days)
+
+    recent = [
+        t for t in txns
+        if t["date"] >= cutoff
+        and "internet deposit"    not in t["description"].lower()
+        and "internet withdrawal" not in t["description"].lower()
+        and "sct deposit"         not in t["description"].lower()
+        and "transfer"            not in t["description"].lower()
+    ]
+
+    deployed = sum(t["debit"]  for t in recent)
+    returned = sum(t["credit"] for t in recent)
+    net      = returned - deployed
+    balance  = get_latest_balance(INVESTING_CSV)
+
+    return {
+        "deployed":  round(deployed, 2),
+        "returned":  round(returned, 2),
+        "net":       round(net, 2),
+        "balance":   balance,
+        "txn_count": len(recent),
+        "days":      days,
+        "available": INVESTING_CSV.exists(),
     }
 
 
@@ -430,6 +466,20 @@ def get_finance_summary():
             lines.append(f"  ⚠ Behind pace — ${income['total']:.0f} earned, ~${prorated:.0f} expected by day {_days_elapsed}")
         else:
             lines.append(f"  ✓ On pace — ${income['total']:.0f} of ~${expected:.0f} expected this month")
+        lines.append("")
+
+    # ── Reselling P&L ─────────────────────────────────────────────────────────
+    reselling = analyse_reselling(days=7)
+    if reselling["available"]:
+        lines.append("RESELLING (last 7 days):")
+        lines.append(f"  Deployed         ${reselling['deployed']:.2f}  (inventory)")
+        lines.append(f"  Returned         ${reselling['returned']:.2f}  (sales)")
+        net = reselling["net"]
+        net_sign = "+" if net >= 0 else "−"
+        net_label = "profit" if net >= 0 else "burn"
+        lines.append(f"  Net              {net_sign}${abs(net):.2f}  ({net_label} this week)")
+        if reselling["balance"] is not None:
+            lines.append(f"  Account balance  ${reselling['balance']:,.2f}")
         lines.append("")
 
     # ── Savings progress ──────────────────────────────────────────────────────
