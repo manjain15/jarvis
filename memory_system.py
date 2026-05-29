@@ -128,6 +128,33 @@ def load_todays_data():
         except Exception as e:
             pass
 
+    # Telegram conversation (turns from today)
+    telegram_path = SCRIPT_DIR / "data" / "telegram_thread.jsonl"
+    if telegram_path.exists():
+        try:
+            today_turns = []
+            with open(telegram_path) as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        entry = json.loads(line)
+                    except Exception:
+                        continue
+                    ts = entry.get("ts", "")
+                    if not ts.startswith(today_str):
+                        continue
+                    today_turns.append(entry)
+            if today_turns:
+                tg_lines = ["TELEGRAM CONVERSATION TODAY:"]
+                for e in today_turns:
+                    role = "Manav" if e["role"] == "user" else "Jarvis"
+                    tg_lines.append(f"  [{e['ts'][11:16]}] {role}: {e['text'][:200]}")
+                sections.append("\n".join(tg_lines))
+        except Exception:
+            pass
+
     # Google Health
     try:
         from google_health import fetch_sleep, fetch_resting_hr, fetch_steps, get_access_token
@@ -420,6 +447,28 @@ def run_memory_update():
             print("⏭   No new profile updates needed")
     except Exception as e:
         print(f"⚠️   Proposal generation failed: {e}")
+
+    # Generate term-context update proposals
+    print("📚  Checking for term-context update proposals...")
+    try:
+        import term_updates
+        term_proposals = term_updates.generate_proposals(today_data, episodic_entry)
+        added_count = 0
+        for p in term_proposals:
+            was_added = term_updates.add_proposal(
+                p.get("action"),
+                p.get("params", {}),
+                p.get("summary", ""),
+                p.get("reason", ""),
+            )
+            if was_added:
+                added_count += 1
+        if added_count > 0:
+            print(f"✅  {added_count} new term-context proposal(s) queued")
+        else:
+            print("⏭   No new term-context updates needed")
+    except Exception as e:
+        print(f"⚠️   Term proposal generation failed: {e}")
 
     # Write episodic
     added = append_episodic(episodic_entry, today)

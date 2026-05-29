@@ -1,0 +1,106 @@
+{
+  "term": {
+    "name": "T2 2026",
+    "week": 1,
+    "start_date": "2026-06-01",
+    "end_date": "2026-11-15",
+    "notes": "First week back — establish routines early."
+  },
+
+  "subjects": [
+    {
+      "code": "COMP2511",
+      "name": "Object-Oriented Design & Programming",
+      "assessments": [
+        { "name": "Assignment 1", "due": null, "weight": null, "status": "pending" },
+        { "name": "Assignment 2", "due": null, "weight": null, "status": "pending" },
+        { "name": "Final Exam",   "due": null, "weight": null, "status": "pending" }
+      ],
+      "notes": "Update due dates when released on Moodle."
+    },
+    {
+      "code": "MATH2601",
+      "name": "Higher Linear Algebra",
+      "assessments": [
+        { "name": "Assignment 1", "due": null, "weight": null, "status": "pending" },
+        { "name": "Midterm",      "due": null, "weight": null, "status": "pending" },
+        { "name": "Final Exam",   "due": null, "weight": null, "status": "pending" }
+      ],
+      "notes": ""
+    },
+    {
+      "code": "MATH2901",
+      "name": "Higher Theory of Statistics",
+      "assessments": [
+        { "name": "Assignment 1", "due": null, "weight": null, "status": "pending" },
+        { "name": "Midterm",      "due": null, "weight": null, "status": "pending" },
+        { "name": "Final Exam",   "due": null, "weight": null, "status": "pending" }
+      ],
+      "notes": ""
+    }
+  ],
+
+  "internships": [
+    {
+      "company": "Canva",
+      "role": "Software Engineer Intern",
+      "status": "OA_completed",
+      "applied_date": "2026-05",
+      "last_update": "2026-05-29",
+      "next_action": "Await interview invite",
+      "notes": "OA done. Strong candidate — follow up if no response in 2 weeks."
+    },
+    {
+      "company": "Amazon",
+      "role": "SDE Intern",
+      "status": "applied",
+      "applied_date": "2026-05",
+      "last_update": "2026-05-29",
+      "next_action": "Await OA or response",
+      "notes": "No response yet."
+    },
+    {
+      "company": "Dolby",
+      "role": "Software Intern",
+      "status": "applied",
+      "applied_date": "2026-05",
+      "last_update": "2026-05-29",
+      "next_action": "Await response",
+      "notes": "No response yet."
+    }
+  ],
+
+  "mentor": {
+    "name": "Google Mentor",
+    "company": "Google",
+    "relationship": "industry mentor — ad-hoc availability based",
+    "last_contact": "2026-05-29",
+    "last_topic": "Sent list of startup opportunities for feedback",
+    "awaiting_response": true,
+    "next_action": "Follow up if no reply within 1 week",
+    "notes": "No fixed schedule. Reach out when you have something concrete or a decision to make."
+  },
+
+  "extracurriculars": [
+    {
+      "name": "Jarvis",
+      "type": "portfolio_project",
+      "status": "active",
+      "goal": "Full personal AI assistant — deeply integrated into daily life",
+      "current_focus": "Term context module + uni integration",
+      "notes": "Demo-worthy for Google/Canva/Amazon interviews."
+    }
+  ],
+
+  "portfolio_targets": [
+    "Have 2 strong project demos ready before internship interview season peaks",
+    "Push Jarvis to GitHub (cleaned up) before T2 ends",
+    "Build 1 new standalone project in T2 — preferably ML or distributed systems"
+  ],
+
+  "us_exchange": {
+    "target_date": "January 2027",
+    "savings_target": 35000,
+    "notes": "Track monthly in finance module."
+  }
+}

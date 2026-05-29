@@ -22,6 +22,12 @@ try:
 except Exception:
     INTELLIGENCE_AVAILABLE = False
 
+try:
+    from term_context import get_term_summary, get_flags
+    TERM_CONTEXT_AVAILABLE = True
+except Exception:
+    TERM_CONTEXT_AVAILABLE = False
+
 
 import json
 import datetime
@@ -221,6 +227,71 @@ def collect_finance_data(week_start, week_end):
     return "\n".join(lines)
 
 
+def collect_term_context():
+    """Formats term/uni/internship/mentor context for the weekly review prompt."""
+    if not TERM_CONTEXT_AVAILABLE:
+        return "TERM CONTEXT: module not available."
+
+    try:
+        term  = get_term_summary()
+        flags = get_flags()
+    except Exception as e:
+        return f"TERM CONTEXT: unavailable ({e})."
+
+    lines = ["TERM / UNI / INTERNSHIP CONTEXT:"]
+
+    if term.get("term_name"):
+        lines.append(f"  Term: {term['term_name']} — Week {term.get('term_week','?')}")
+    if term.get("subjects"):
+        lines.append(f"  Subjects: {', '.join(term['subjects'])}")
+
+    assessments = term.get("assessments") or []
+    if assessments:
+        lines.append("  Upcoming assessments (next 21 days):")
+        for a in assessments:
+            weight = f" [{a['weight']}%]" if a.get("weight") else ""
+            lines.append(f"    • {a['subject']} — {a['name']}{weight} → due {a['due']} ({a['days_left']}d)")
+    else:
+        lines.append("  No assessment due dates filled in term_context.json yet.")
+
+    internships = term.get("internships") or []
+    if internships:
+        lines.append("  Internship pipeline:")
+        for app in internships:
+            lines.append(
+                f"    • {app.get('company')} ({app.get('role','')}) — {app.get('status','')} "
+                f"| last update {app.get('last_update','?')} | next: {app.get('next_action','')}"
+            )
+
+    mentor = term.get("mentor") or {}
+    if mentor:
+        lines.append(
+            f"  Mentor: {mentor.get('name','')} — last contact {mentor.get('last_contact','?')}, "
+            f"topic: {mentor.get('last_topic','')}"
+            + (" [awaiting reply]" if mentor.get("awaiting_response") else "")
+        )
+
+    portfolio_targets = term.get("portfolio_targets") or []
+    if portfolio_targets:
+        lines.append("  Portfolio targets this term:")
+        for p in portfolio_targets:
+            lines.append(f"    • {p}")
+
+    exch = term.get("exchange_target") or {}
+    if exch:
+        lines.append(
+            f"  US Exchange: {exch.get('target_date','?')} — "
+            f"savings goal ${exch.get('savings_target','?')}"
+        )
+
+    if flags:
+        lines.append("  Flags:")
+        for f in flags:
+            lines.append(f"    • {f}")
+
+    return "\n".join(lines)
+
+
 def collect_episodic_memory(week_start, week_end):
     """Pulls episodic memory entries from the past week."""
     episodic_path = MEMORY_DIR / "episodic.md"
@@ -250,7 +321,7 @@ def collect_episodic_memory(week_start, week_end):
 
 # ── Generate the review ───────────────────────────────────────────────────────
 
-def generate_weekly_review(health, workouts, finance, memory, job_links=''):
+def generate_weekly_review(health, workouts, finance, memory, job_links='', term=''):
     """Sends all week data to Claude and generates the full review."""
     tz         = TIMEZONE
     week_start, week_end = get_week_dates()
@@ -287,6 +358,8 @@ THIS WEEK'S DATA:
 
 {memory}
 
+{term}
+
 Write a full weekly review in clean HTML. Return ONLY raw HTML, no markdown, no code fences.
 Structure exactly like this:
 
@@ -304,12 +377,18 @@ Format as short punchy lines. Be honest — don't soften bad numbers.]
 - What the data says about how the body is doing
 Be specific with numbers. Flag patterns, not just one-offs.]
 
+<h3>📚 Uni & term progress</h3>
+[Use TERM CONTEXT. State current term + week, the subjects he's enrolled in, and the closest
+upcoming assessments (with weights + days remaining). If due dates are missing, tell him to update
+term_context.json. Comment on whether his portfolio targets for the term are on track. 3-5 lines.]
+
 <h3>💼 Career & internship</h3>
-[Honest assessment of career progress this week.
-- Applications sent (number, companies)
-- Google mentor relationship — any contact?
-- LinkedIn, networking, portfolio work
-- Are they moving fast enough given the T1 holiday window?
+[Honest assessment of career progress this week. Use the TERM CONTEXT internship pipeline.
+- Reference each tracked company by name with its current status (Canva OA, Amazon applied, Dolby applied)
+- Applications sent this week (number, companies)
+- Google mentor — last_contact date, awaiting_response status, any follow-up needed
+- LinkedIn, networking, portfolio work — and Jarvis as a demoable project
+- Are they moving fast enough given the term window?
 Be direct. If it was a bad week for career, say so clearly.]
 
 <h3>💰 Finance</h3>
@@ -339,6 +418,13 @@ Make them achievable but not easy.]
 List them with their URL. Tell Manav specifically what to do — "Open Canva careers page and
 search for software intern roles. If anything is open, apply by Wednesday."
 Also remind him to check Prosple and GradConnection. Keep it actionable, not generic.]
+
+<h3>🔧 Jarvis upkeep — answer these</h3>
+[Three direct questions for Manav to answer this week so term_context.json stays accurate:
+  • Have you updated assessment due dates in term_context.json now that Moodle has them?
+  • Any internship status changes this week (new OAs, interviews, offers, rejections)?
+  • When did you last speak to your Google mentor — and is a follow-up overdue?
+Format as a short bulleted list. Keep it punchy.]
 
 <h3>⚡ One thing</h3>
 [If Manav could only do ONE thing differently next week, what would it be?
@@ -466,8 +552,11 @@ def run_weekly_review():
     except Exception:
         job_links = ""
 
+    print("📚  Loading term context...")
+    term = collect_term_context()
+
     print("✍️   Generating review with Claude...")
-    review_html = generate_weekly_review(health, workouts, finance, memory, job_links)
+    review_html = generate_weekly_review(health, workouts, finance, memory, job_links, term)
 
     print("📤  Sending review...")
     # Append intelligence report to the review

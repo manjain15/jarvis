@@ -187,7 +187,7 @@ Return ONLY the JSON array, nothing else."""
             proposals = json.loads(clean)
         except json.JSONDecodeError:
             # Try to extract just the array portion
-            import re
+
             match = re.search(r'\[.*\]', clean, re.DOTALL)
             if match:
                 try:

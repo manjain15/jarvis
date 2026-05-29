@@ -119,6 +119,13 @@ try:
 except Exception:
     OVERLOAD_AVAILABLE = False
 
+# ── Term context integration (optional) ─────────────────────────────────────
+try:
+    from term_context import get_term_summary, get_flags
+    TERM_CONTEXT_AVAILABLE = True
+except Exception:
+    TERM_CONTEXT_AVAILABLE = False
+
 # Google OAuth scopes — these are the exact permissions we request
 # Gmail: read emails + send the brief back to you
 # Calendar: read your events
@@ -280,18 +287,38 @@ def fetch_emails(creds, hours_back=18, max_emails=15):
     emails = []
 
     for msg in messages:
-        # Fetch full message headers (not body — keeps it fast)
-        msg_data = service.users().messages().get(
-            userId="me",
-            id=msg["id"],
-            format="metadata",
-            metadataHeaders=["From", "Subject", "Date"],
-        ).execute()
+        # Fetch with retry + timeout to handle flaky network at 7am
+        msg_data = None
+        for attempt in range(3):
+            try:
+                req = service.users().messages().get(
+                    userId="me",
+                    id=msg["id"],
+                    format="metadata",
+                    metadataHeaders=["From", "Subject", "Date"],
+                )
+                # httplib2 socket timeout (seconds)
+                import socket
+                old_timeout = socket.getdefaulttimeout()
+                socket.setdefaulttimeout(10)
+                try:
+                    msg_data = req.execute()
+                finally:
+                    socket.setdefaulttimeout(old_timeout)
+                break  # success, exit retry loop
+            except Exception as e:
+                if attempt == 2:
+                    print(f"    ⚠️  Skipping message {msg['id']} after 3 attempts: {e}")
+                else:
+                    import time
+                    time.sleep(2 ** attempt)  # 1s, 2s backoff
+
+        if msg_data is None:
+            continue
 
         headers = {h["name"]: h["value"] for h in msg_data["payload"]["headers"]}
         snippet = msg_data.get("snippet", "")
 
-        # Clean up the From field: "John Smith <john@example.com>" → "John Smith"
         sender_raw = headers.get("From", "Unknown")
         sender = sender_raw.split("<")[0].strip().strip('"')
 
@@ -304,7 +331,6 @@ def fetch_emails(creds, hours_back=18, max_emails=15):
 
     return emails
 
-
 # ─────────────────────────────────────────────────────────────────────────────
 # STEP 4 — BUILD THE PROMPT FOR CLAUDE
 # ─────────────────────────────────────────────────────────────────────────────
@@ -314,7 +340,7 @@ def fetch_emails(creds, hours_back=18, max_emails=15):
 #   - Your recent emails
 #   - Exact instructions for how to write the brief
 
-def build_prompt(profile_text, events, emails, today_str, checkin_summary=None, fitbit_data=None, finance_data=None, hevy_data=None, memory_data=None, jobs_data=None, overload_data=None, pokemon_data=None, tasks_data=None, daily_plan=None, proposals_text=None):
+def build_prompt(profile_text, events, emails, today_str, checkin_summary=None, fitbit_data=None, finance_data=None, hevy_data=None, memory_data=None, jobs_data=None, overload_data=None, pokemon_data=None, tasks_data=None, daily_plan=None, proposals_text=None, term_data=None, term_flags=None):
     """
     Constructs the full prompt sent to Claude.
     Returns a string.
@@ -385,7 +411,63 @@ def build_prompt(profile_text, events, emails, today_str, checkin_summary=None, 
         pokemon_section = "  No inventory file found — copy Excel to jarvis/pokemon/inventory.xlsx"
 
     tasks_section = tasks_data or "  Google Tasks not connected."
-    plan_section  = daily_plan or "  Could not generate plan today." 
+    plan_section  = daily_plan or "  Could not generate plan today."
+
+    # ── Term / uni / internship context ──
+    if term_data:
+        lines = []
+        if term_data.get("term_name"):
+            lines.append(f"  Term: {term_data['term_name']} — Week {term_data.get('term_week', '?')}")
+        if term_data.get("subjects"):
+            lines.append(f"  Subjects: {', '.join(term_data['subjects'])}")
+
+        assessments = term_data.get("assessments") or []
+        if assessments:
+            lines.append("  Upcoming assessments (next 21 days):")
+            for a in assessments:
+                weight = f" [{a['weight']}%]" if a.get("weight") else ""
+                lines.append(f"    • {a['subject']} — {a['name']}{weight} → due {a['due']} ({a['days_left']}d)")
+        else:
+            lines.append("  No assessment due dates filled in yet (update term_context.json when Moodle releases them).")
+
+        internships = term_data.get("internships") or []
+        if internships:
+            lines.append("  Internship pipeline:")
+            for app in internships:
+                lines.append(
+                    f"    • {app.get('company')} ({app.get('role','')}) — {app.get('status','')} "
+                    f"| next: {app.get('next_action','')}"
+                )
+
+        mentor = term_data.get("mentor") or {}
+        if mentor:
+            lines.append(
+                f"  Mentor ({mentor.get('name','')}): last contact {mentor.get('last_contact','?')} — "
+                f"{mentor.get('last_topic','')}"
+                + (" [awaiting reply]" if mentor.get("awaiting_response") else "")
+            )
+
+        portfolio_targets = term_data.get("portfolio_targets") or []
+        if portfolio_targets:
+            lines.append("  Portfolio targets:")
+            for p in portfolio_targets:
+                lines.append(f"    • {p}")
+
+        exch = term_data.get("exchange_target") or {}
+        if exch:
+            lines.append(
+                f"  US Exchange target: {exch.get('target_date','?')} — "
+                f"savings goal ${exch.get('savings_target','?')}"
+            )
+
+        term_section = "\n".join(lines) if lines else "  No term context loaded."
+    else:
+        term_section = "  Term context module not available."
+
+    if term_flags:
+        flags_section = "\n".join(f"  • {f}" for f in term_flags)
+    else:
+        flags_section = "  No urgent term/internship/mentor flags today."
 
     prompt = f"""You are Jarvis — a highly intelligent personal assistant who knows this person deeply.
 You speak directly, concisely, and with genuine intelligence. No fluff. No filler.
@@ -458,6 +540,16 @@ TODAY'S PLAN:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 {plan_section}
 
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TERM / UNI / INTERNSHIP CONTEXT:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+{term_section}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TERM FLAGS (urgent nudges for today):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+{flags_section}
+
 ────────────────────────────
 YOUR TASK — write their morning briefing:
 ────────────────────────────
@@ -480,9 +572,20 @@ Flag urgency clearly. If nothing urgent, say so.]
 they should do today? Be specific — not "work on your career" but something actionable.
 Rotate focus across: internship search, health, and their passion project.]
 
+<h3>📚 Uni check</h3>
+[Use TERM CONTEXT. State current term + week. If any assessments are due within 7 days, surface
+the most urgent one (subject, name, days left, weight). If nothing is due soon, say so and nudge
+them to update term_context.json when Moodle releases dates. 2-3 lines.]
+
 <h3>💼 Internship pulse & new roles</h3>
-[A direct, honest check-in on their internship goal. Have they applied recently?
-What should they do today — even one small step? Be direct, not gentle.]
+[Use TERM CONTEXT internship pipeline. Reference current statuses by company (Canva OA awaiting,
+Amazon/Dolby applied, etc.). If TERM FLAGS surface a stale application or an OA-awaiting-interview
+nudge, call it out by name. Then suggest ONE concrete action for today — apply somewhere new,
+follow up on a stale app, or prep for an upcoming interview. Be direct, not gentle.]
+
+<h3>🤝 Mentor & network</h3>
+[Use TERM CONTEXT mentor data. If awaiting_response and >=7 days have passed, push them to follow
+up today with a specific draft line. Otherwise, one line on mentor status. Omit if nothing actionable.]
 
 <h3>💪 Health check</h3>
 [Use FITBIT DATA for sleep/HR/steps AND HEVY DATA for workout tracking AND PROGRESSIVE OVERLOAD data. State actual sleep vs 7-8hr target, resting HR. Confirm if they trained yesterday, any PBs. State today's split. If any lifts are stalling, flag the most important one. 5-6 lines max, direct and specific.]
@@ -490,8 +593,8 @@ What should they do today — even one small step? Be direct, not gentle.]
 <h3>💰 Finance flag</h3>
 [Use the FINANCE DATA — be specific with real numbers. Call out: unusual transactions over $50, any category spending that seems high vs a ~$75/week budget (~$300/month total spending), savings progress vs $35k Jan 2027 goal, and the Pokemon reselling plan (keep asking until it exists). 3-4 lines max, direct. ALSO: if today is Sunday, remind Manav to export his St. George CSV (everyday + 2 savings accounts) and drop them in the jarvis/finance/ folder to keep finance tracking accurate for the week ahead.]
 
-<h3>🔄 Profile updates</h3>
-[ONLY include this section if there are pending profile update proposals in the data. List each proposal concisely — section, what would change, and why. Tell Manav to run 'python update_profile.py' to approve. If no proposals, omit this section entirely.]
+<h3>🔄 Profile & term updates</h3>
+[ONLY include this section if there are pending proposals in the data (profile OR term context). List each proposal concisely — what would change, and why. For profile proposals tell Manav to run 'python update_profile.py'; for term-context proposals tell him to run 'python term_updates.py'. If both types are pending, mention both commands. If no proposals at all, omit this section entirely.]
 
 <h3>⚡ Today's mindset</h3>
 [ONE sentence. Sharp. Motivating. Personalised to where they are right now.
@@ -511,16 +614,26 @@ Just start. Be Jarvis."""
 def generate_brief(prompt):
     """
     Sends the prompt to Claude and returns the HTML brief as a string.
+    Retries up to 5 times on overload errors with exponential backoff.
     """
+    import time
     client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
 
-    message = client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=1500,
-        messages=[{"role": "user", "content": prompt}],
-    )
-
-    return message.content[0].text
+    for attempt in range(5):
+        try:
+            message = client.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=1500,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            return message.content[0].text
+        except anthropic.APIStatusError as e:
+            if e.status_code == 529 and attempt < 4:
+                wait = 10 * (2 ** attempt)  # 10s, 20s, 40s, 80s
+                print(f"    ⚠️  Claude overloaded, retrying in {wait}s (attempt {attempt + 1}/5)...")
+                time.sleep(wait)
+            else:
+                raise
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -643,8 +756,12 @@ def run_brief():
     print(f"    Found {len(events)} event(s) today")
 
     print("📬  Fetching emails...")
-    emails = fetch_emails(creds)
-    print(f"    Found {len(emails)} unread email(s)")
+    try:
+        emails = fetch_emails(creds)
+        print(f"    Found {len(emails)} unread email(s)")
+    except Exception as e:
+        print(f"    ⚠️  Email fetch failed: {e} — continuing without emails")
+        emails = []
 
     # Load last night's check-in summary
     checkin_summary = load_last_checkin()
@@ -685,6 +802,16 @@ def run_brief():
     except Exception:
         pass
 
+    # Load pending term-context proposals (append to same proposals_text block)
+    try:
+        from term_updates import format_proposals_for_brief as format_term_proposals
+        term_proposals_text = format_term_proposals()
+        if term_proposals_text:
+            proposals_text = (proposals_text + "\n\n" + term_proposals_text).strip()
+            print("📚  Pending term-context proposals loaded")
+    except Exception:
+        pass
+
     # Load memory
     memory_data = None
     if MEMORY_AVAILABLE:
@@ -722,10 +849,20 @@ def run_brief():
         tasks_data = None
     if 'daily_plan' not in dir():
         daily_plan = None
+    
+    # Fetch term data
+    term_data  = {}
+    term_flags = []
+    if TERM_CONTEXT_AVAILABLE:
+        try:
+            term_data  = get_term_summary()
+            term_flags = get_flags()
+        except Exception:
+            pass
 
     # Build prompt and call Claude
     print("🧠  Generating brief with Claude...")
-    prompt = build_prompt(profile_text, events, emails, today_str, checkin_summary, fitbit_data, finance_data, hevy_data, memory_data, jobs_data, overload_data, pokemon_data, tasks_data, daily_plan, proposals_text)
+    prompt = build_prompt(profile_text, events, emails, today_str, checkin_summary, fitbit_data, finance_data, hevy_data, memory_data, jobs_data, overload_data, pokemon_data, tasks_data, daily_plan, proposals_text, term_data, term_flags)
     brief  = generate_brief(prompt)
     print("✅  Brief generated")
 

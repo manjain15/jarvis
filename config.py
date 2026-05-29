@@ -33,3 +33,11 @@ HEVY_API_KEY= "***REMOVED***"
 NTFY_CHANNEL = "***REMOVED***"  # paste your channel name here
 
 OPENAI_API_KEY = "***REMOVED***"
+
+# ── Telegram (always-on conversational Jarvis) ───────────────────────────────
+# 1. Open Telegram, message @BotFather, send /newbot, follow prompts → get TOKEN
+# 2. Paste token below
+# 3. Send any message to your new bot, then run: python jarvis_telegram.py --setup
+#    to capture your chat ID and have it written here automatically.
+TELEGRAM_BOT_TOKEN = "***REMOVED***"   # e.g. "1234567890:AAH...."
+TELEGRAM_CHAT_ID   = 8839328524    # numeric — filled in by --setup
