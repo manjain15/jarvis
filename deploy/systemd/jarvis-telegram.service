@@ -1,0 +1,17 @@
+[Unit]
+Description=Jarvis Telegram daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=jarvis
+Group=jarvis
+WorkingDirectory=/home/jarvis/jarvis
+ExecStart=/home/jarvis/jarvis/venv/bin/python /home/jarvis/jarvis/jarvis_telegram.py
+Restart=on-failure
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
