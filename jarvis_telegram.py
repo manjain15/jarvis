@@ -55,6 +55,7 @@ import shlex
 import datetime
 import argparse
 import threading
+import subprocess
 from pathlib import Path
 
 import pytz
@@ -279,6 +280,7 @@ def cmd_help(_args):
         "/internship Co key=val ... — update internship\n"
         "/mentor \"topic\" [true|false] — log mentor touchpoint\n"
         "/log <text> — append a note to episodic memory\n"
+        "/status — health-check the VPS daemons\n"
         "\nAnything else → I respond conversationally."
     )
 
@@ -389,6 +391,62 @@ def cmd_log(args):
     return f"✅ Logged to episodic: {text}"
 
 
+# Units checked by /status: the always-on service, then the timer-driven jobs.
+STATUS_ALWAYS_ON   = ["jarvis-telegram"]
+STATUS_TIMER_UNITS = [
+    "jarvis-morningbrief", "jarvis-alerts", "jarvis-gmail",
+    "jarvis-memory", "jarvis-jobsearch",
+]
+
+
+def _systemctl(*cmd):
+    """Run a read-only shell query (systemctl/df/uptime) and return stripped stdout, '' on error."""
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        return out.stdout.strip()
+    except Exception:
+        return ""
+
+
+def cmd_status(_args):
+    """/status — health-check the VPS daemons: telegram service, all timers, host disk/uptime.
+
+    Replies are sent as plain text (no parse_mode), so this returns a plain string.
+    """
+    lines = ["🩺 Jarvis status"]
+
+    # Always-on services: the .service itself should be active.
+    for unit in STATUS_ALWAYS_ON:
+        state = _systemctl("systemctl", "is-active", f"{unit}.service")
+        mark = "✅" if state == "active" else "❌"
+        lines.append(f"{mark} {unit.replace('jarvis-', '')}: {state or 'unknown'}")
+
+    # Timer-driven units: the timer should be active; flag a failed last run.
+    lines.append("\nTimers:")
+    for unit in STATUS_TIMER_UNITS:
+        active = _systemctl("systemctl", "is-active", f"{unit}.timer")
+        failed = _systemctl("systemctl", "is-failed", f"{unit}.service")
+        name = unit.replace("jarvis-", "")
+        if failed == "failed":
+            lines.append(f"⚠️ {name}: last run FAILED")
+        elif active == "active":
+            lines.append(f"✅ {name}: scheduled")
+        else:
+            lines.append(f"❌ {name}: {active or 'unknown'}")
+
+    # Host health.
+    disk = _systemctl("df", "-h", "/").splitlines()
+    if len(disk) >= 2:
+        cols = disk[-1].split()
+        if len(cols) >= 5:
+            lines.append(f"\nDisk /: {cols[4]} used ({cols[2]}/{cols[1]})")
+    uptime = _systemctl("uptime", "-p")
+    if uptime:
+        lines.append(f"Uptime: {uptime.replace('up ', '')}")
+
+    return "\n".join(lines)
+
+
 COMMANDS = {
     "/help":       cmd_help,
     "/start":      cmd_help,
@@ -399,6 +457,7 @@ COMMANDS = {
     "/internship": cmd_internship,
     "/mentor":     cmd_mentor,
     "/log":        cmd_log,
+    "/status":     cmd_status,
 }
 
 
