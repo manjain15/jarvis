@@ -108,22 +108,6 @@ Never write outside `/Users/manavjain/jarvis/`.
 
 ---
 
-## Current State (as of term start T2 2026)
-
-**Live modules:** morning_brief, weekly_review, weekly_intelligence, finance_tracker,
-google_health, hevy, jarvis_calendar, jarvis_mem0, term_context (new — needs wiring)
-
-**Pending:** wire term_context into morning_brief.py and weekly_review.py
-(see `TERM_CONTEXT_INTEGRATION.py` for exact patch locations)
-
-**Internship pipeline:** Canva (OA done), Amazon (applied), Dolby (applied)
-
-**Mentor:** Google mentor — awaiting reply on startup opportunities list
-
-**Subjects:** COMP2511, MATH2601, MATH2901 — due dates not yet in term_context.json
-
----
-
 ## What NOT to do
 
 - Do not refactor working code unless asked
