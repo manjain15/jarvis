@@ -1,41 +1,34 @@
 """
-Jarvis Evening Check-in
-=======================
-Runs every evening at 9:30pm (via cron).
-Asks Manav a series of questions across all four life areas,
-saves the responses to a dated JSON log, and generates a
-brief summary that the morning brief reads the next day.
+Jarvis Evening Check-in (Telegram-driven)
+=========================================
+The check-in is a daily reflection across all life areas. Its two artifacts
+drive the rest of Jarvis:
+  - data/checkin_YYYY-MM-DD.json  → read by memory_system.py (nightly, 22:00)
+  - data/summary_YYYY-MM-DD.txt   → read by morning_brief.py the next day
 
-HOW IT WORKS:
-  1. Opens in terminal and asks questions one by one
-  2. Saves all responses to data/checkin_YYYY-MM-DD.json
-  3. Sends responses to Claude for a short reflection + tomorrow's focus
-  4. Saves that summary to data/summary_YYYY-MM-DD.txt
-  5. Morning brief automatically reads yesterday's summary if it exists
+ARCHITECTURE (since the VPS migration):
+  The terminal version is retired — systemd timers have no TTY. The flow now
+  runs over Telegram: jarvis_telegram.py auto-starts it at 21:00 (or on /checkin),
+  walks the question plan one message at a time, then calls the functions here to
+  persist and summarise. This module owns the question plan, answer parsing, and
+  artifact writing — it is the single source of truth for both.
 
-TO RUN MANUALLY:
-  cd /Users/manavjain/jarvis
-  source venv/bin/activate
-  python evening_checkin.py
-
-TO SCHEDULE (add to crontab -e):
-  30 21 * * * cd /Users/manavjain/jarvis && venv/bin/python evening_checkin.py >> jarvis_evening.log 2>&1
+  This file is import-only for the daemon. Run it directly to print the plan:
+      python evening_checkin.py
 """
 
-import os
-import sys
 import json
 import datetime
-import pytz
 from pathlib import Path
 
+import pytz
 import anthropic
 import config
 
 # ── Setup ─────────────────────────────────────────────────────────────────────
 
-SCRIPT_DIR  = Path(__file__).parent
-DATA_DIR    = SCRIPT_DIR / "data"
+SCRIPT_DIR   = Path(__file__).parent
+DATA_DIR     = SCRIPT_DIR / "data"
 PROFILE_FILE = SCRIPT_DIR / "profile.md"
 
 DATA_DIR.mkdir(exist_ok=True)
@@ -43,253 +36,236 @@ DATA_DIR.mkdir(exist_ok=True)
 TIMEZONE = pytz.timezone(config.TIMEZONE)
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
 def now_sydney():
+    """Current time in the configured timezone."""
     return datetime.datetime.now(TIMEZONE)
-
-def ask(question, allow_skip=True):
-    """
-    Prints a question and returns the user's input.
-    Empty input = skipped (returns None).
-    """
-    skip_hint = "  (press Enter to skip)" if allow_skip else ""
-    print(f"\n  {question}{skip_hint}")
-    print("  › ", end="", flush=True)
-    try:
-        response = input().strip()
-        return response if response else None
-    except (EOFError, KeyboardInterrupt):
-        # Handle non-interactive / cron environments gracefully
-        return None
-
-def ask_yn(question):
-    """
-    Yes/no question. Returns True, False, or None (skipped).
-    Accepts: y/yes/1/yep/yeah = True, n/no/0/nope/nah = False
-    """
-    print(f"\n  {question}  (y/n, or Enter to skip)")
-    print("  › ", end="", flush=True)
-    try:
-        response = input().strip().lower()
-        if response in ("y", "yes", "1", "yep", "yeah"):
-            return True
-        elif response in ("n", "no", "0", "nope", "nah"):
-            return False
-        return None
-    except (EOFError, KeyboardInterrupt):
-        return None
-
-def ask_number(question, unit="", min_val=None, max_val=None):
-    """
-    Asks for a numeric input. Returns float or None.
-    """
-    print(f"\n  {question}  (press Enter to skip)")
-    print("  › ", end="", flush=True)
-    try:
-        response = input().strip()
-        if not response:
-            return None
-        val = float(response)
-        if min_val is not None and val < min_val:
-            return min_val
-        if max_val is not None and val > max_val:
-            return max_val
-        return val
-    except (ValueError, EOFError, KeyboardInterrupt):
-        return None
-
-def divider(title=""):
-    width = 52
-    if title:
-        pad = (width - len(title) - 2) // 2
-        print(f"\n  {'─' * pad} {title} {'─' * pad}")
-    else:
-        print(f"\n  {'─' * width}")
-
-def header():
-    today = now_sydney()
-    date_str = today.strftime("%A, %d %B %Y")
-    print(f"""
-╔══════════════════════════════════════════════════════╗
-║           JARVIS  —  Evening Check-in               ║
-║           {date_str:<42} ║
-╚══════════════════════════════════════════════════════╝""")
 
 
 # ── PPLRUL helper ─────────────────────────────────────────────────────────────
-# PPLRUL = Push, Pull, Legs, Rest, Upper, Lower
-# Cycle starts from a known anchor date — update ANCHOR_DATE and ANCHOR_DAY
-# if you need to re-sync the cycle.
+# PPLRUL cycle starts from a known anchor date — update ANCHOR_DATE and
+# ANCHOR_DAY if you need to re-sync the cycle.
 
 PPLRUL = ["Push", "Pull", "Legs", "Rest", "Upper", "Sharms", "Rest"]
 ANCHOR_DATE = datetime.date(2026, 5, 13)
 ANCHOR_DAY  = 2  # Legs on May 13 (Wednesday) — Push starts Monday
 
+
 def get_pplrul_day(date=None):
-    """Returns today's PPLRUL label."""
+    """Returns the PPLRUL label for the given date (default: today)."""
     if date is None:
         date = now_sydney().date()
     delta = (date - ANCHOR_DATE).days
     index = (ANCHOR_DAY + delta) % len(PPLRUL)
     return PPLRUL[index]
 
+
 def get_tomorrow_pplrul():
+    """Returns tomorrow's PPLRUL label."""
     tomorrow = now_sydney().date() + datetime.timedelta(days=1)
     return get_pplrul_day(tomorrow)
 
 
-# ── The check-in questions ────────────────────────────────────────────────────
+# ── Question plan (single source of truth) ─────────────────────────────────────
+# Each step is a dict:
+#   key       — the response-dict key (must stay stable: memory_system + the
+#               summary prompt read these)
+#   prompt    — the question text shown to Manav
+#   type      — "yn" | "number" | "text"
+#   min/max   — clamp bounds for number questions (optional)
+#   followups — dict mapping a parsed answer (True/False) to a list of further
+#               steps, spliced in only when that answer is given (optional)
 
-def run_checkin():
-    """
-    Runs the full evening check-in across all four life areas.
-    Returns a dict of all responses.
-    """
-    today      = now_sydney()
-    today_str  = today.strftime("%A, %d %B %Y")
-    pplrul_day = get_pplrul_day()
-    tomorrow_split = get_tomorrow_pplrul()
-
-    responses = {
+def init_responses():
+    """Returns the base response dict (the fields not asked as questions)."""
+    today = now_sydney()
+    return {
         "date": today.strftime("%Y-%m-%d"),
         "day_of_week": today.strftime("%A"),
-        "pplrul_today": pplrul_day,
-        "pplrul_tomorrow": tomorrow_split,
+        "pplrul_today": get_pplrul_day(),
+        "pplrul_tomorrow": get_tomorrow_pplrul(),
     }
 
-    header()
 
-    print(f"""
-  Good evening, Manav. Quick check-in before you wind down.
-  Today was {pplrul_day} day. Tomorrow is {tomorrow_split}.
-  Answer what you can — skip anything that doesn't apply.
-""")
+def build_checkin_steps(pplrul_today, pplrul_tomorrow):
+    """
+    Build the ordered list of check-in steps for the given PPLRUL context.
+    The rest-day vs gym-day branch is decided here, at build time.
+    """
+    steps = []
 
-    # ── SECTION 1: Health & Fitness ───────────────────────────────────────────
-    divider("HEALTH & FITNESS")
-
-    if pplrul_day != "Rest":
-        responses["workout_done"] = ask_yn(f"Did you hit the gym today? ({pplrul_day} session)")
-        if responses["workout_done"]:
-            responses["workout_notes"] = ask("Any notes on the session? (weight, reps, how it felt)")
-        elif responses["workout_done"] is False:
-            responses["workout_skip_reason"] = ask("What got in the way?")
+    # ── Health & Fitness ──────────────────────────────────────────────────────
+    if pplrul_today != "Rest":
+        steps.append({
+            "key": "workout_done",
+            "prompt": f"Did you hit the gym today? ({pplrul_today} session)",
+            "type": "yn",
+            "followups": {
+                True:  [{"key": "workout_notes",
+                         "prompt": "Any notes on the session? (weight, reps, how it felt)",
+                         "type": "text"}],
+                False: [{"key": "workout_skip_reason",
+                         "prompt": "What got in the way?",
+                         "type": "text"}],
+            },
+        })
     else:
-        print("\n  Rest day — no gym today. Good.")
-        responses["workout_done"] = None  # rest day, not applicable
-        responses["rest_day_active_recovery"] = ask_yn("Did you do any active recovery or stretching?")
+        steps.append({
+            "key": "rest_day_active_recovery",
+            "prompt": "Rest day today — did you do any active recovery or stretching?",
+            "type": "yn",
+        })
 
-    responses["sleep_hours_last_night"] = ask_number(
-        "How many hours did you sleep last night?", "hrs", min_val=2, max_val=14
-    )
+    steps.append({"key": "sleep_hours_last_night",
+                  "prompt": "How many hours did you sleep last night?",
+                  "type": "number", "min": 2, "max": 14})
+    steps.append({"key": "sleep_target_tonight",
+                  "prompt": f"What time are you aiming to be in bed tonight? "
+                            f"(target: 7–8hrs before tomorrow's {pplrul_tomorrow} day)",
+                  "type": "text"})
+    steps.append({"key": "weight_today",
+                  "prompt": "Did you weigh yourself today? If yes, what was it? (kg)",
+                  "type": "number", "min": 40, "max": 150})
+    steps.append({"key": "energy_level",
+                  "prompt": "Energy level today — 1 (exhausted) to 10 (great)?",
+                  "type": "number", "min": 1, "max": 10})
 
-    responses["sleep_target_tonight"] = ask(
-        f"What time are you aiming to be in bed tonight? (target: 7–8hrs before tomorrow's {tomorrow_split} day)"
-    )
+    # ── Career & Internship ───────────────────────────────────────────────────
+    steps.append({"key": "application_sent",
+                  "prompt": "Did you send any internship applications today?",
+                  "type": "yn",
+                  "followups": {True: [{"key": "application_details",
+                                        "prompt": "Which company/role?", "type": "text"}]}})
+    steps.append({"key": "google_mentor_contact",
+                  "prompt": "Did you contact your Google mentor today or recently?",
+                  "type": "yn",
+                  "followups": {True: [{"key": "mentor_notes",
+                                        "prompt": "What did you discuss or what was the outcome?",
+                                        "type": "text"}]}})
+    steps.append({"key": "career_work_done",
+                  "prompt": "Did you do any career-building work today? "
+                            "(LeetCode, portfolio, LinkedIn, networking)",
+                  "type": "yn",
+                  "followups": {True: [{"key": "career_work_details",
+                                        "prompt": "What did you work on?", "type": "text"}]}})
 
-    responses["weight_today"] = ask_number(
-        "Did you weigh yourself today? If yes, what was it? (kg)", "kg", min_val=40, max_val=150
-    )
+    # ── Uni ───────────────────────────────────────────────────────────────────
+    steps.append({"key": "uni_work_done",
+                  "prompt": "Did you do any uni work today?",
+                  "type": "yn",
+                  "followups": {True: [{"key": "uni_work_details",
+                                        "prompt": "What did you work on?", "type": "text"}]}})
+    steps.append({"key": "upcoming_deadline",
+                  "prompt": "Any uni deadlines coming up in the next 2 weeks you want Jarvis to track?",
+                  "type": "text"})
 
-    responses["energy_level"] = ask_number(
-        "Energy level today — 1 (exhausted) to 10 (great)?", "", min_val=1, max_val=10
-    )
+    # ── Passion Project ───────────────────────────────────────────────────────
+    steps.append({"key": "project_work_done",
+                  "prompt": "Did you work on your passion project today?",
+                  "type": "yn",
+                  "followups": {
+                      True:  [{"key": "project_details",
+                               "prompt": "What did you work on or figure out?", "type": "text"}],
+                      False: [{"key": "project_blocker",
+                               "prompt": "What's blocking you or why didn't it happen?",
+                               "type": "text"}],
+                  }})
 
-    # ── SECTION 2: Career & Internship ───────────────────────────────────────
-    divider("CAREER & INTERNSHIP")
+    # ── Finances ──────────────────────────────────────────────────────────────
+    steps.append({"key": "pokemon_plan_progress",
+                  "prompt": "Any progress on the Pokemon reselling plan today?",
+                  "type": "yn",
+                  "followups": {True: [{"key": "pokemon_plan_details",
+                                        "prompt": "What did you figure out or decide?",
+                                        "type": "text"}]}})
+    steps.append({"key": "unusual_spending",
+                  "prompt": "Any unusual spending today worth flagging?",
+                  "type": "yn",
+                  "followups": {True: [{"key": "spending_details",
+                                        "prompt": "What was it?", "type": "text"}]}})
 
-    responses["application_sent"] = ask_yn("Did you send any internship applications today?")
-    if responses["application_sent"]:
-        responses["application_details"] = ask("Which company/role?")
+    # ── General ───────────────────────────────────────────────────────────────
+    steps.append({"key": "day_rating",
+                  "prompt": "Rate today overall — 1 (wrote-off) to 10 (crushed it)?",
+                  "type": "number", "min": 1, "max": 10})
+    steps.append({"key": "biggest_win",
+                  "prompt": "What was the best thing that happened or that you did today?",
+                  "type": "text"})
+    steps.append({"key": "tomorrow_focus",
+                  "prompt": "What's the ONE thing you most want to get done tomorrow?",
+                  "type": "text"})
+    steps.append({"key": "anything_else",
+                  "prompt": "Anything else on your mind you want Jarvis to know or remember?",
+                  "type": "text"})
 
-    responses["google_mentor_contact"] = ask_yn("Did you contact your Google mentor today or recently?")
-    if responses["google_mentor_contact"]:
-        responses["mentor_notes"] = ask("What did you discuss or what was the outcome?")
-
-    responses["career_work_done"] = ask_yn(
-        "Did you do any career-building work today? (LeetCode, portfolio, LinkedIn, networking)"
-    )
-    if responses["career_work_done"]:
-        responses["career_work_details"] = ask("What did you work on?")
-
-    # ── SECTION 3: Uni ────────────────────────────────────────────────────────
-    divider("UNI")
-
-    responses["uni_work_done"] = ask_yn("Did you do any uni work today?")
-    if responses["uni_work_done"]:
-        responses["uni_work_details"] = ask("What did you work on?")
-
-    responses["upcoming_deadline"] = ask(
-        "Any uni deadlines coming up in the next 2 weeks you want Jarvis to track?"
-    )
-
-    # ── SECTION 4: Passion Project ────────────────────────────────────────────
-    divider("PASSION PROJECT")
-
-    responses["project_work_done"] = ask_yn("Did you work on your passion project today?")
-    if responses["project_work_done"]:
-        responses["project_details"] = ask("What did you work on or figure out?")
-    else:
-        responses["project_blocker"] = ask("What's blocking you or why didn't it happen?")
-
-    # ── SECTION 5: Finances ───────────────────────────────────────────────────
-    divider("FINANCES")
-
-    responses["pokemon_plan_progress"] = ask_yn(
-        "Any progress on the Pokemon reselling plan today?"
-    )
-    if responses["pokemon_plan_progress"]:
-        responses["pokemon_plan_details"] = ask("What did you figure out or decide?")
-
-    responses["unusual_spending"] = ask_yn("Any unusual spending today worth flagging?")
-    if responses["unusual_spending"]:
-        responses["spending_details"] = ask("What was it?")
-
-    # ── SECTION 6: General ────────────────────────────────────────────────────
-    divider("GENERAL")
-
-    responses["day_rating"] = ask_number(
-        "Rate today overall — 1 (wrote-off) to 10 (crushed it)?", "", min_val=1, max_val=10
-    )
-
-    responses["biggest_win"] = ask("What was the best thing that happened or that you did today?")
-
-    responses["tomorrow_focus"] = ask(
-        "What's the ONE thing you most want to get done tomorrow?"
-    )
-
-    responses["anything_else"] = ask(
-        "Anything else on your mind you want Jarvis to know or remember?"
-    )
-
-    return responses
+    return steps
 
 
-# ── Save responses ────────────────────────────────────────────────────────────
+# Tokens that mean "skip this question" — kept small so they don't eat real answers.
+_SKIP_TOKENS = {"skip", "-", ""}
+_YES_TOKENS  = {"y", "yes", "1", "yep", "yeah", "yup"}
+_NO_TOKENS   = {"n", "no", "0", "nope", "nah"}
+
+
+def parse_answer(step, raw_text):
+    """
+    Convert a raw text reply into the typed value for `step`.
+    Returns the parsed value, or None for a skip/blank/unparseable input
+    (None preserves the old terminal behaviour: skipped → 'not provided').
+    """
+    text = (raw_text or "").strip()
+    if text.lower() in _SKIP_TOKENS:
+        return None
+
+    kind = step["type"]
+    if kind == "yn":
+        low = text.lower()
+        if low in _YES_TOKENS:
+            return True
+        if low in _NO_TOKENS:
+            return False
+        return None
+    if kind == "number":
+        try:
+            val = float(text)
+        except ValueError:
+            return None
+        if "min" in step and val < step["min"]:
+            return step["min"]
+        if "max" in step and val > step["max"]:
+            return step["max"]
+        return val
+    return text  # free text
+
+
+# ── Persistence ────────────────────────────────────────────────────────────────
 
 def save_responses(responses):
-    """Saves check-in responses to a dated JSON file."""
-    date_str = responses["date"]
-    path = DATA_DIR / f"checkin_{date_str}.json"
+    """Saves check-in responses to a dated JSON file. Returns the path."""
+    path = DATA_DIR / f"checkin_{responses['date']}.json"
     with open(path, "w") as f:
         json.dump(responses, f, indent=2)
     return path
 
 
-# ── Generate Claude summary ───────────────────────────────────────────────────
+def save_summary(summary, date_str):
+    """Saves the Claude summary to a dated text file. Returns the path."""
+    path = DATA_DIR / f"summary_{date_str}.txt"
+    with open(path, "w") as f:
+        f.write(summary)
+    return path
+
+
+# ── Claude summary ──────────────────────────────────────────────────────────────
 
 def generate_summary(responses):
     """
-    Sends responses to Claude and gets a short summary + tomorrow's focus.
+    Sends responses to Claude and returns a short summary + tomorrow's focus.
     This is what the morning brief reads the next day.
     """
     client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
 
-    # Load profile for context
     profile_text = PROFILE_FILE.read_text() if PROFILE_FILE.exists() else ""
 
-    # Format responses into readable text
     r = responses
     pplrul_today    = r.get("pplrul_today", "Unknown")
     pplrul_tomorrow = r.get("pplrul_tomorrow", "Unknown")
@@ -379,54 +355,19 @@ Be direct. No fluff. Write it as a handoff note from tonight-Jarvis to tomorrow-
     return message.content[0].text
 
 
-def save_summary(summary, date_str):
-    """Saves the Claude summary to a dated text file."""
-    path = DATA_DIR / f"summary_{date_str}.txt"
-    with open(path, "w") as f:
-        f.write(summary)
-    return path
-
-
-# ── Print closing screen ──────────────────────────────────────────────────────
-
-def print_closing(summary, responses):
-    tomorrow_split = responses.get("pplrul_tomorrow", "")
-    divider()
-    print(f"""
-  ✅  Check-in saved. Here's Jarvis's read on today:
-
-{summary}
-
-  Tomorrow is {tomorrow_split} day. Get to bed.
-""")
-    divider()
-
-
-# ── Main ──────────────────────────────────────────────────────────────────────
-
-def main():
-    try:
-        # Run the check-in
-        responses = run_checkin()
-
-        print("\n\n  💾  Saving responses...")
-        checkin_path = save_responses(responses)
-
-        print("  🧠  Generating summary with Claude...")
-        summary = generate_summary(responses)
-
-        summary_path = save_summary(summary, responses["date"])
-
-        print_closing(summary, responses)
-
-        print(f"  Files saved:")
-        print(f"    {checkin_path}")
-        print(f"    {summary_path}\n")
-
-    except KeyboardInterrupt:
-        print("\n\n  Check-in cancelled. See you tomorrow.\n")
-        sys.exit(0)
-
+# ── CLI (plan dump only — terminal check-in is retired) ─────────────────────────
 
 if __name__ == "__main__":
-    main()
+    today = now_sydney()
+    steps = build_checkin_steps(get_pplrul_day(), get_tomorrow_pplrul())
+    print("Terminal check-in is retired — the flow runs over Telegram "
+          "(jarvis_telegram.py).")
+    print(f"\nQuestion plan for {today:%A %d %b %Y} "
+          f"(today={get_pplrul_day()}, tomorrow={get_tomorrow_pplrul()}):\n")
+    n = 0
+    for step in steps:
+        n += 1
+        print(f"  {n:2d}. [{step['type']:6}] {step['key']}: {step['prompt']}")
+        for answer, followups in step.get("followups", {}).items():
+            for f in followups:
+                print(f"          ↳ if {answer}: [{f['type']:6}] {f['key']}: {f['prompt']}")

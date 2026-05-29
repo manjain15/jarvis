@@ -63,6 +63,7 @@ import requests
 import anthropic
 
 import config
+import evening_checkin
 
 SCRIPT_DIR  = Path(__file__).parent
 DATA_DIR    = SCRIPT_DIR / "data"
@@ -281,6 +282,8 @@ def cmd_help(_args):
         "/mentor \"topic\" [true|false] — log mentor touchpoint\n"
         "/log <text> — append a note to episodic memory\n"
         "/status — health-check the VPS daemons\n"
+        "/checkin — start the evening check-in now\n"
+        "/cancel — abort an in-progress check-in\n"
         "\nAnything else → I respond conversationally."
     )
 
@@ -475,6 +478,106 @@ def handle_command(text):
     return COMMANDS[cmd](parts[1:])
 
 
+# ── Evening check-in session (Telegram-driven) ──────────────────────────────
+# The check-in is a stateful conversation: one question per message. State lives
+# here (the daemon is the only always-on process). The question plan, answer
+# parsing, and artifact writing all live in evening_checkin.py — this is just the
+# message-loop driver. Check-in turns are NOT written to the conversation thread,
+# so they don't pollute the Claude context window.
+
+CHECKIN = {"active": False, "responses": None, "queue": [], "current": None}
+_autostart_done_date = None  # guards against re-triggering the 21:00 auto-start
+
+
+def _reset_checkin():
+    CHECKIN.update(active=False, responses=None, queue=[], current=None)
+
+
+def _checkin_send_question(step):
+    hint = {"yn": "  (y/n, or 'skip')",
+            "number": "  (number, or 'skip')"}.get(step["type"], "  (or 'skip')")
+    send_message(f"{step['prompt']}{hint}")
+
+
+def _advance_checkin():
+    """Ask the next queued question, or finalise if the queue is empty."""
+    if not CHECKIN["queue"]:
+        _finalize_checkin()
+        return
+    step = CHECKIN["queue"].pop(0)
+    CHECKIN["current"] = step
+    _checkin_send_question(step)
+
+
+def _finalize_checkin():
+    """Persist the check-in, generate the summary, send it, and clear state."""
+    responses = CHECKIN["responses"]
+    try:
+        evening_checkin.save_responses(responses)
+        summary = evening_checkin.generate_summary(responses)
+        evening_checkin.save_summary(summary, responses["date"])
+        send_message("✅ Check-in saved. Here's the read on today:\n\n" + summary)
+    except Exception as e:
+        send_message(f"⚠️ Check-in error while saving/summarising: {e}")
+    finally:
+        _reset_checkin()
+
+
+def start_checkin():
+    """Begin a check-in session, sending the intro and first question."""
+    if CHECKIN["active"]:
+        send_message("A check-in's already in progress — answer the current question, or /cancel.")
+        return
+    responses = evening_checkin.init_responses()
+    CHECKIN.update(
+        active=True,
+        responses=responses,
+        queue=evening_checkin.build_checkin_steps(
+            responses["pplrul_today"], responses["pplrul_tomorrow"]),
+        current=None,
+    )
+    send_message(
+        f"🌙 Evening check-in. Today was {responses['pplrul_today']}, "
+        f"tomorrow is {responses['pplrul_tomorrow']}.\n"
+        "Answer what you can — reply 'skip' to skip any question, /cancel to stop."
+    )
+    _advance_checkin()
+
+
+def handle_checkin_reply(text):
+    """Route a reply into the active check-in: parse, store, splice follow-ups."""
+    step = CHECKIN["current"]
+    if step is None:
+        _advance_checkin()
+        return
+    value = evening_checkin.parse_answer(step, text)
+    CHECKIN["responses"][step["key"]] = value
+    followups = step.get("followups", {}).get(value)
+    if followups:
+        CHECKIN["queue"][0:0] = followups
+    _advance_checkin()
+
+
+def maybe_autostart_checkin():
+    """Auto-start the check-in once daily at/after 21:00 if not already done."""
+    global _autostart_done_date
+    if CHECKIN["active"]:
+        return
+    now = evening_checkin.now_sydney()
+    if now.hour < 21:
+        return
+    today_str = now.strftime("%Y-%m-%d")
+    if _autostart_done_date == today_str:
+        return
+    # Already completed today (manual /checkin or a prior run)? Don't re-ask.
+    if (DATA_DIR / f"summary_{today_str}.txt").exists():
+        _autostart_done_date = today_str
+        return
+    _autostart_done_date = today_str
+    print(f"🌙  Auto-starting evening check-in ({now.strftime('%H:%M')})")
+    start_checkin()
+
+
 # ── Main listener loop ──────────────────────────────────────────────────────
 
 def handle_update(update, static_context_holder):
@@ -492,6 +595,22 @@ def handle_update(update, static_context_holder):
         return
 
     print(f"📩  [{datetime.datetime.now(TIMEZONE).strftime('%H:%M:%S')}] {text[:80]}")
+
+    # ── Evening check-in interception (before commands / Claude) ──────────────
+    cmd_word = text.split()[0].split("@")[0].lower() if text.startswith("/") else ""
+    if cmd_word == "/cancel":
+        msg_out = "Check-in cancelled. Nothing saved." if CHECKIN["active"] else "Nothing to cancel."
+        _reset_checkin()
+        send_message(msg_out)
+        return
+    if cmd_word == "/checkin":
+        start_checkin()
+        return
+    if CHECKIN["active"]:
+        handle_checkin_reply(text)
+        return
+
+    # ── Normal path: persist to thread, route command or Claude ───────────────
     append_turn("user", text)
 
     reply = handle_command(text)
@@ -536,6 +655,8 @@ def run_listener():
             if time.time() - static_context_holder["ts"] > REFRESH_SECONDS:
                 static_context_holder["text"] = build_static_context()
                 static_context_holder["ts"]   = time.time()
+
+            maybe_autostart_checkin()
 
             updates = get_updates(offset)
             for upd in updates:
