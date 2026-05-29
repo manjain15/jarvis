@@ -1,0 +1,12 @@
+[Unit]
+Description=Run Jarvis alerts at 12:00, 18:00, 20:00 AEST
+
+[Timer]
+OnCalendar=*-*-* 12:00:00
+OnCalendar=*-*-* 18:00:00
+OnCalendar=*-*-* 20:00:00
+Persistent=true
+Unit=jarvis-alerts.service
+
+[Install]
+WantedBy=timers.target

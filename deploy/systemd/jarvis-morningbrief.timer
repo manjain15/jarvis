@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Jarvis morning brief at 07:05 AEST
+
+[Timer]
+OnCalendar=*-*-* 07:05:00
+Persistent=true
+Unit=jarvis-morningbrief.service
+
+[Install]
+WantedBy=timers.target

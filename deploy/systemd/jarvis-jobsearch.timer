@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Jarvis job search at 06:45 AEST
+
+[Timer]
+OnCalendar=*-*-* 06:45:00
+Persistent=true
+Unit=jarvis-jobsearch.service
+
+[Install]
+WantedBy=timers.target

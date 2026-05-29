@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Jarvis Gmail monitor every 30 minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=30min
+Unit=jarvis-gmail.service
+
+[Install]
+WantedBy=timers.target

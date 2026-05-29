@@ -1,0 +1,13 @@
+[Unit]
+Description=Jarvis proactive alerts
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=jarvis
+Group=jarvis
+WorkingDirectory=/home/jarvis/jarvis
+ExecStart=/home/jarvis/jarvis/venv/bin/python /home/jarvis/jarvis/alerts.py
+Environment=PYTHONUNBUFFERED=1
+TimeoutStartSec=300

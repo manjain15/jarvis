@@ -1,0 +1,13 @@
+[Unit]
+Description=Jarvis memory consolidation
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=jarvis
+Group=jarvis
+WorkingDirectory=/home/jarvis/jarvis
+ExecStart=/home/jarvis/jarvis/venv/bin/python /home/jarvis/jarvis/memory_system.py
+Environment=PYTHONUNBUFFERED=1
+TimeoutStartSec=600

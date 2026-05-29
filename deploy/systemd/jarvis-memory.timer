@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Jarvis memory consolidation at 22:00 AEST
+
+[Timer]
+OnCalendar=*-*-* 22:00:00
+Persistent=true
+Unit=jarvis-memory.service
+
+[Install]
+WantedBy=timers.target
