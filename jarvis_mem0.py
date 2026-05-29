@@ -30,8 +30,8 @@ HOW IT WORKS:
 
 COST:
   - Claude Haiku for memory extraction: ~$0.001 per nightly update
-  - Embeddings: free (local sentence-transformers model)
-  - Storage: local, no cloud
+  - Embeddings: OpenAI text-embedding-3-small (~$0.05/month at current volume)
+  - Storage: local Chroma DB (per-host, not synced)
 
 CLI:
   python jarvis_mem0.py --search "Pokemon reselling"
@@ -71,9 +71,10 @@ def _get_mem0_config():
             }
         },
         "embedder": {
-            "provider": "huggingface",
+            "provider": "openai",
             "config": {
-                "model": "multi-qa-MiniLM-L6-cos-v1"
+                "model": "text-embedding-3-small",
+                "api_key": config.OPENAI_API_KEY,
             }
         },
         "vector_store": {
