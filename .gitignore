@@ -18,8 +18,9 @@ __pycache__/
 # Logs
 *.log
 
-# Mac
-.DS_Store
+# Local memory layers & profile backups — private
 memory/
 profile_backup_*.md
+
+# Mac
 .DS_Store
