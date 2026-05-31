@@ -104,7 +104,7 @@ def _event_occurs_on(comp, target):
         return first == target
 
     rule = comp.get("rrule")
-    freq = _rrule_scalar(rule, "FREQ", "WEEKLY")
+    freq = str(_rrule_scalar(rule, "FREQ", "WEEKLY")).upper()
     if freq != "WEEKLY":
         # A class timetable only uses weekly recurrence; ignore anything else.
         return False

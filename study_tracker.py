@@ -139,17 +139,22 @@ def get_revision_alerts(today=None):
     return alerts
 
 
-def get_drift_alerts(today=None, max_age_days=8):
+def get_drift_alerts(today=None, max_age_days=8, data_dir=None):
     """
     Flag courses Manav reported falling behind in, from the most recent evening
     check-in (keepup_<CODE> == False, asked Sundays). Only honours a check-in
     within the last `max_age_days` so a stale 'no' doesn't nag indefinitely.
+
+    `data_dir` overrides the check-in directory (defaults to ./data) — used by tests.
     """
     today = _today(today)
     try:
         from pathlib import Path
         import json
-        data_dir = Path(__file__).parent / "data"
+        if data_dir is None:
+            data_dir = Path(__file__).parent / "data"
+        else:
+            data_dir = Path(data_dir)
         files = sorted(data_dir.glob("checkin_*.json"))
         if not files:
             return []
