@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Jarvis watchdog every 3 hours
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=3h
+Unit=jarvis-watchdog.service
+
+[Install]
+WantedBy=timers.target

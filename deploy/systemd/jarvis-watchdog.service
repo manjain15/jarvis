@@ -1,0 +1,13 @@
+[Unit]
+Description=Jarvis watchdog — health-check daemons/timers, alert Telegram on failure
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=jarvis
+Group=jarvis
+WorkingDirectory=/home/jarvis/jarvis
+ExecStart=/home/jarvis/jarvis/venv/bin/python /home/jarvis/jarvis/watchdog.py
+Environment=PYTHONUNBUFFERED=1
+TimeoutStartSec=120
