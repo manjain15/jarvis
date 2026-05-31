@@ -124,6 +124,15 @@ def get_free_blocks(min_duration_mins=45):
         if e["time"] != "All day":
             busy.append(e["start"])
 
+    # Add today's UNSW classes so deep-work/gym aren't suggested during lectures.
+    # Optional: silently skipped if the timetable module/feed isn't available.
+    try:
+        import uni_timetable
+        for class_start, _class_end in uni_timetable.get_busy_blocks():
+            busy.append(class_start)
+    except Exception:
+        pass
+
     # Simple gap finder
     busy_sorted = sorted(busy)
     free_blocks = []

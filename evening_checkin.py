@@ -323,6 +323,14 @@ GENERAL:
 {fmt('anything_else', 'Anything else')}
 """
 
+    # Optional: tomorrow's UNSW timetable, so TOMORROW CONTEXT is class-aware.
+    timetable_text = ""
+    try:
+        import uni_timetable
+        timetable_text = uni_timetable.get_tomorrow_summary()
+    except Exception:
+        timetable_text = ""
+
     prompt = f"""You are Jarvis — Manav's personal AI assistant. You know him well.
 
 Here is his profile:
@@ -330,6 +338,7 @@ Here is his profile:
 
 Here is his evening check-in for today:
 {checkin_text}
+{timetable_text}
 
 Write a SHORT end-of-day summary (max 200 words) that will be read by tomorrow morning's briefing.
 Structure it as:

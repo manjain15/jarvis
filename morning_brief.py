@@ -66,6 +66,13 @@ try:
 except Exception:
     FINANCE_AVAILABLE = False
 
+# ── UNSW timetable (optional) ─────────────────────────────────────────────────
+try:
+    import uni_timetable
+    TIMETABLE_AVAILABLE = True
+except Exception:
+    TIMETABLE_AVAILABLE = False
+
 # ── Memory system (optional) ──────────────────────────────────────────────────
 try:
     from jarvis_mem0 import load_memory_for_prompt as load_memory
@@ -256,6 +263,14 @@ def fetch_calendar_events(creds):
             "location":    e.get("location", ""),
             "description": e.get("description", "")[:200],  # truncate long descriptions
         })
+
+    # Merge in today's UNSW timetable classes (subscribed .ics feed). Dormant
+    # and harmless if the feed URL is unset or the module is unavailable.
+    if TIMETABLE_AVAILABLE:
+        try:
+            events.extend(uni_timetable.get_today_events_brief())
+        except Exception:
+            pass
 
     return events
 

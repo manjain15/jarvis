@@ -18,6 +18,10 @@ NTFY_CHANNEL       = os.environ.get("NTFY_CHANNEL", "")
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_CHAT_ID   = int(os.environ.get("TELEGRAM_CHAT_ID", "0"))
 
+# UNSW timetable: subscribed .ics feed URL (webcal:// or https://...ics).
+# Empty = integration dormant; see uni_timetable.py.
+TIMETABLE_ICS_URL  = os.environ.get("TIMETABLE_ICS_URL", "")
+
 # ── Non-secret config ────────────────────────────────────────────────────────
 # Full timezone list: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones
 TIMEZONE         = "Australia/Sydney"
