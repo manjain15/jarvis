@@ -140,6 +140,13 @@ try:
 except Exception:
     COURSE_SCHEDULE_AVAILABLE = False
 
+# ── Study tracker — assessment ramp-up + revision alerts (optional) ───────────
+try:
+    import study_tracker
+    STUDY_TRACKER_AVAILABLE = True
+except Exception:
+    STUDY_TRACKER_AVAILABLE = False
+
 # Google OAuth scopes — these are the exact permissions we request
 # Gmail: read emails + send the brief back to you
 # Calendar: read your events
@@ -362,7 +369,7 @@ def fetch_emails(creds, hours_back=18, max_emails=15):
 #   - Your recent emails
 #   - Exact instructions for how to write the brief
 
-def build_prompt(profile_text, events, emails, today_str, checkin_summary=None, fitbit_data=None, finance_data=None, hevy_data=None, memory_data=None, jobs_data=None, overload_data=None, pokemon_data=None, tasks_data=None, daily_plan=None, proposals_text=None, term_data=None, term_flags=None, course_topics=None):
+def build_prompt(profile_text, events, emails, today_str, checkin_summary=None, fitbit_data=None, finance_data=None, hevy_data=None, memory_data=None, jobs_data=None, overload_data=None, pokemon_data=None, tasks_data=None, daily_plan=None, proposals_text=None, term_data=None, term_flags=None, course_topics=None, academic_alerts=None):
     """
     Constructs the full prompt sent to Claude.
     Returns a string.
@@ -496,6 +503,8 @@ def build_prompt(profile_text, events, emails, today_str, checkin_summary=None, 
     else:
         flags_section = "  No urgent term/internship/mentor flags today."
 
+    academic_section = academic_alerts if academic_alerts else "  No assessment or revision alerts right now."
+
     prompt = f"""You are Jarvis — a highly intelligent personal assistant who knows this person deeply.
 You speak directly, concisely, and with genuine intelligence. No fluff. No filler.
 You push them toward their goals. You're the voice in their ear that keeps them sharp.
@@ -571,6 +580,11 @@ TODAY'S PLAN:
 TERM / UNI / INTERNSHIP CONTEXT:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 {term_section}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STUDY & ASSESSMENT ALERTS (ramp-up + revision — act on these):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+{academic_section}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 TERM FLAGS (urgent nudges for today):
@@ -885,6 +899,13 @@ def run_brief():
         except Exception:
             course_topics = ""
 
+    academic_alerts = ""
+    if STUDY_TRACKER_AVAILABLE:
+        try:
+            academic_alerts = study_tracker.get_academic_alerts_block()
+        except Exception:
+            academic_alerts = ""
+
     term_data  = {}
     term_flags = []
     if TERM_CONTEXT_AVAILABLE:
@@ -896,7 +917,7 @@ def run_brief():
 
     # Build prompt and call Claude
     print("🧠  Generating brief with Claude...")
-    prompt = build_prompt(profile_text, events, emails, today_str, checkin_summary, fitbit_data, finance_data, hevy_data, memory_data, jobs_data, overload_data, pokemon_data, tasks_data, daily_plan, proposals_text, term_data, term_flags, course_topics)
+    prompt = build_prompt(profile_text, events, emails, today_str, checkin_summary, fitbit_data, finance_data, hevy_data, memory_data, jobs_data, overload_data, pokemon_data, tasks_data, daily_plan, proposals_text, term_data, term_flags, course_topics, academic_alerts)
     brief  = generate_brief(prompt)
     print("✅  Brief generated")
 

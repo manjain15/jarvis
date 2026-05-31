@@ -319,9 +319,49 @@ def collect_episodic_memory(week_start, week_end):
     return "EPISODIC MEMORY: No entries for this week yet."
 
 
+# ── Study plan ────────────────────────────────────────────────────────────────
+
+def collect_study_plan():
+    """
+    Builds next week's study picture for the review: the coming week's per-course
+    topics + the live assessment/revision alerts (reused from the morning brief).
+    Empty string on any failure.
+    """
+    parts = []
+
+    # Next week's topics, by current term week + 1.
+    try:
+        import term_context, course_schedule
+        week = term_context.current_term_week(term_context.load_context())
+        if week is not None and week >= 0:
+            next_week = week + 1
+            rows = course_schedule.get_week_topics(next_week)
+            if rows:
+                lines = [f"Next week (Week {next_week}) topics:"]
+                for r in rows:
+                    topics = "; ".join(r["topics"]) if r["topics"] else "—"
+                    lines.append(f"  {r['code']}: {topics}")
+                    if r["assessments"]:
+                        lines.append(f"     ⚑ {' | '.join(r['assessments'])}")
+                parts.append("\n".join(lines))
+    except Exception:
+        pass
+
+    # Assessment ramp-up + revision + drift alerts (weight-scaled).
+    try:
+        import study_tracker
+        block = study_tracker.get_academic_alerts_block()
+        if block:
+            parts.append(block)
+    except Exception:
+        pass
+
+    return "\n\n".join(parts)
+
+
 # ── Generate the review ───────────────────────────────────────────────────────
 
-def generate_weekly_review(health, workouts, finance, memory, job_links='', term=''):
+def generate_weekly_review(health, workouts, finance, memory, job_links='', term='', study_plan=''):
     """Sends all week data to Claude and generates the full review."""
     tz         = TIMEZONE
     week_start, week_end = get_week_dates()
@@ -360,6 +400,9 @@ THIS WEEK'S DATA:
 
 {term}
 
+STUDY PLAN INPUT (next week's topics + live assessment/revision/drift alerts):
+{study_plan if study_plan else "  No course schedule / assessment data available."}
+
 Write a full weekly review in clean HTML. Return ONLY raw HTML, no markdown, no code fences.
 Structure exactly like this:
 
@@ -381,6 +424,9 @@ Be specific with numbers. Flag patterns, not just one-offs.]
 [Use TERM CONTEXT. State current term + week, the subjects he's enrolled in, and the closest
 upcoming assessments (with weights + days remaining). If due dates are missing, tell him to update
 term_context.json. Comment on whether his portfolio targets for the term are on track. 3-5 lines.]
+
+<h3>📚 Study plan for next week</h3>
+[Use STUDY PLAN INPUT. Lay out a concrete week-ahead study plan: which course topics are coming up, which assessments to ADVANCE (start or continue, weighted by importance — a 30% midterm outranks a 5% test), and what to REVISE for upcoming tests. Turn the alerts into specific actions — e.g. "Block two 90-min sessions for the MATH2901 midterm: re-derive the CLT and drill transformations of random variables." If a course was flagged as behind (drift alert), make catching it up the first priority. 4-6 lines.]
 
 <h3>💼 Career & internship</h3>
 [Honest assessment of career progress this week. Use the TERM CONTEXT internship pipeline.

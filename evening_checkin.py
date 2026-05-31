@@ -86,11 +86,34 @@ def init_responses():
     }
 
 
-def build_checkin_steps(pplrul_today, pplrul_tomorrow):
+def _course_codes():
+    """Course codes for the current term ([] on failure). Prefers course_schedule."""
+    try:
+        import course_schedule
+        codes = [c.get("code") for c in course_schedule.load_courses() if c.get("code")]
+        if codes:
+            return codes
+    except Exception:
+        pass
+    try:
+        import term_context
+        ctx = term_context.load_context()
+        return [s["code"] for s in ctx.get("subjects", []) if s.get("code")]
+    except Exception:
+        return []
+
+
+def build_checkin_steps(pplrul_today, pplrul_tomorrow, weekday=None):
     """
     Build the ordered list of check-in steps for the given PPLRUL context.
     The rest-day vs gym-day branch is decided here, at build time.
+
+    `weekday` is Python's date.weekday() (Mon=0..Sun=6); defaults to today.
+    On Sundays a per-course "kept up with lectures?" question is appended so the
+    brief can flag a course that's slipping — asked weekly, not nightly.
     """
+    if weekday is None:
+        weekday = now_sydney().date().weekday()
     steps = []
 
     # ── Health & Fitness ──────────────────────────────────────────────────────
@@ -182,6 +205,22 @@ def build_checkin_steps(pplrul_today, pplrul_tomorrow):
                   "type": "yn",
                   "followups": {True: [{"key": "spending_details",
                                         "prompt": "What was it?", "type": "text"}]}})
+
+    # ── Uni: weekly per-course keep-up (Sundays only) ─────────────────────────
+    # Asked once a week so the morning brief can flag a course Manav is falling
+    # behind in. A "no" on keepup_<CODE> becomes a drift alert (study_tracker).
+    if weekday == 6:  # Sunday
+        for code in _course_codes():
+            steps.append({
+                "key": f"keepup_{code}",
+                "prompt": f"Kept up with {code} lectures/content this week?",
+                "type": "yn",
+                "followups": {
+                    False: [{"key": f"behind_{code}",
+                             "prompt": f"What are you behind on in {code}?",
+                             "type": "text"}],
+                },
+            })
 
     # ── General ───────────────────────────────────────────────────────────────
     steps.append({"key": "day_rating",
