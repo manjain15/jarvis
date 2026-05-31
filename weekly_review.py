@@ -601,8 +601,11 @@ def run_weekly_review():
     print("📚  Loading term context...")
     term = collect_term_context()
 
+    print("📚  Building study plan...")
+    study_plan = collect_study_plan()
+
     print("✍️   Generating review with Claude...")
-    review_html = generate_weekly_review(health, workouts, finance, memory, job_links, term)
+    review_html = generate_weekly_review(health, workouts, finance, memory, job_links, term, study_plan)
 
     print("📤  Sending review...")
     # Append intelligence report to the review
