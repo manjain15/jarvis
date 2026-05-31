@@ -1,0 +1,20 @@
+{
+  "code": "MATH2901",
+  "name": "Higher Theory of Statistics",
+  "term": "26T2",
+  "lectures": "Lectures + tutorials",
+  "labs_due": null,
+  "source": "26T2 course outline (subject to change)",
+  "schedule": [
+    { "week": 1,  "topics": ["Introduction — Probability theory"], "assessments": [] },
+    { "week": 2,  "topics": ["Random Variables"], "assessments": [] },
+    { "week": 3,  "topics": ["Random vectors"], "assessments": ["Class Test 1 Qs released (~mid-week)"] },
+    { "week": 4,  "topics": ["Common distributions"], "assessments": ["Class Test 1 at start of tutorial (covers wks 1-3)"] },
+    { "week": 5,  "topics": ["Central Limit Theorem", "Transformations of random variables"], "assessments": [] },
+    { "week": 6,  "topics": ["Midterm break"], "assessments": [] },
+    { "week": 7,  "topics": ["Introduction to statistical inference"], "assessments": ["Midterm Test in tutorial — 50min, covers wks 1-5, 30%"] },
+    { "week": 8,  "topics": ["Theory of Estimation, Maximum Likelihood and Moment Estimators"], "assessments": ["Class Test 2 Qs released (end of week)"] },
+    { "week": 9,  "topics": ["Confidence intervals"], "assessments": ["Class Test 2 at start of tutorial (covers wks 7-8)"] },
+    { "week": 10, "topics": ["Hypothesis testing"], "assessments": [] }
+  ]
+}
