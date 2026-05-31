@@ -1,0 +1,20 @@
+{
+  "code": "MATH2601",
+  "name": "Higher Linear Algebra",
+  "term": "26T2",
+  "lectures": "Lectures + active-classroom tutorials (tutorials from Week 1)",
+  "labs_due": null,
+  "source": "26T2 course outline (subject to change)",
+  "schedule": [
+    { "week": 1,  "topics": ["Ch1: Introduction, Groups, Fields", "Ch2 Vector Spaces: definition & examples"], "assessments": ["Practice Qs 1-14"] },
+    { "week": 2,  "topics": ["Ch2 Vector Spaces: Subspaces, Linear Independence & Span, Bases, Dimension, Coordinates, Sums & Direct Sums"], "assessments": ["Practice Qs 15-26"] },
+    { "week": 3,  "topics": ["Ch3 Linear Transformations: Linearity, Kernel & Image, Matrix of a Linear Map, Normal Form"], "assessments": ["Practice Qs 27-39", "Short assignment released by end of week"] },
+    { "week": 4,  "topics": ["Ch3 Linear Transformations: Similarity, multilinearity", "Ch4 Inner Product Spaces: Dot products, General Inner Products, Orthogonality"], "assessments": ["Class Test 1 (covers wks 1-3)", "Practice Qs 40-52"] },
+    { "week": 5,  "topics": ["Ch4 Inner Product Spaces: Gram-Schmidt, complements, adjoints"], "assessments": ["Practice Qs 53-62"] },
+    { "week": 6,  "topics": ["No lectures or tutorials"], "assessments": ["Short assignment due end of week"] },
+    { "week": 7,  "topics": ["Ch4 Inner Product Spaces: Least squares", "Ch5 Determinants & properties", "Ch6 Eigenvalues & Eigenvectors: definitions, characteristic polynomial"], "assessments": ["Practice Qs 63-70"] },
+    { "week": 8,  "topics": ["Ch6 Eigenvalues & Eigenvectors: Multiplicities, normal/self-adjoint/unitary operators, SVD"], "assessments": ["Practice Qs 71-87"] },
+    { "week": 9,  "topics": ["Ch7 The Jordan Form"], "assessments": ["Class Test 2 (covers wks 4-8)", "Practice Qs 88-98"] },
+    { "week": 10, "topics": ["Ch8 Functions of Matrices and ODEs"], "assessments": ["Practice Qs 99-114"] }
+  ]
+}
