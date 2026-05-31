@@ -276,6 +276,7 @@ def cmd_help(_args):
         "Jarvis commands:\n"
         "/brief — run morning brief now\n"
         "/flags — today's term flags\n"
+        "/deadlines — upcoming assessments across all courses\n"
         "/proposals — pending profile + term proposals\n"
         "/done SUB \"Assessment name\" — mark submitted\n"
         "/internship Co key=val ... — update internship\n"
@@ -298,6 +299,27 @@ def cmd_brief(_args):
             send_message(f"⚠️ Brief failed: {e}")
     threading.Thread(target=_run, daemon=True).start()
     return "⏳ Running morning brief — I'll ping you when it's sent."
+
+
+def cmd_deadlines(_args):
+    """/deadlines — upcoming assessments across all courses, on demand."""
+    try:
+        import term_context
+        ctx = term_context.load_context()
+        items = term_context.get_upcoming_assessments(ctx, days_ahead=120)
+    except Exception as e:
+        return f"⚠️ Could not load deadlines: {e}"
+    if not items:
+        return "✅ No assessments due in the next 120 days."
+    lines = ["📅 Upcoming assessments:"]
+    for a in items:
+        try:
+            due = datetime.datetime.fromisoformat(a["due"]).strftime("%-d %b")
+        except Exception:
+            due = a.get("due", "?")
+        weight = f" [{a['weight']}%]" if a.get("weight") else ""
+        lines.append(f"  {due} ({a['days_left']}d) {a['subject']} — {a['name']}{weight}")
+    return "\n".join(lines)
 
 
 def cmd_flags(_args):
@@ -455,6 +477,7 @@ COMMANDS = {
     "/start":      cmd_help,
     "/brief":      cmd_brief,
     "/flags":      cmd_flags,
+    "/deadlines":  cmd_deadlines,
     "/proposals":  cmd_proposals,
     "/done":       cmd_done,
     "/internship": cmd_internship,
