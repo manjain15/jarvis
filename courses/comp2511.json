@@ -1,0 +1,20 @@
+{
+  "code": "COMP2511",
+  "name": "Software Design and Architecture",
+  "term": "26T2",
+  "lectures": "Tue 9-11am Mathews Theatre A; Thu 2-4pm Science Theatre (or Teams)",
+  "labs_due": "Mondays 10am",
+  "source": "26T2 course outline (subject to change)",
+  "schedule": [
+    { "week": 1,  "topics": ["Course Overview", "Introduction to Java", "The Object-Oriented Paradigm"], "assessments": [] },
+    { "week": 2,  "topics": ["Inheritance & Abstract Classes", "Interfaces, Polymorphism & More OO", "Domain Modelling", "Design by Contract"], "assessments": ["Lab 01 due Mon 10am", "Assignment I released"] },
+    { "week": 3,  "topics": ["Exceptions", "Generics & Collections", "JUnit Testing", "Design Principles"], "assessments": ["Lab 02 due Mon 10am"] },
+    { "week": 4,  "topics": ["Refactoring", "Strategy Pattern", "Composite Pattern", "Functional Paradigm"], "assessments": ["Lab 03 due Mon 10am"] },
+    { "week": 5,  "topics": ["Observer Pattern & Event Driven Programming", "Decorator Pattern", "Factory Pattern", "Singleton & Asynchronous Design"], "assessments": ["Lab 04 due Mon 10am", "Assignment I due Wed 3pm", "Assignment II Part 1 released"] },
+    { "week": 6,  "topics": ["Flexibility Week"], "assessments": [] },
+    { "week": 7,  "topics": ["What is Software Architecture?", "Architectural Thinking & Characteristics", "Trade-off Analysis", "ADRs", "Behavioural & Component Modelling", "C4 Modelling"], "assessments": ["Lab 05 due Mon 10am", "Assignment II Part 2 released"] },
+    { "week": 8,  "topics": ["Architectural Styles", "Layered Architecture", "Modular Monolithic Architecture", "Microservices Architecture Style"], "assessments": ["Lab 07 due Mon 10am"] },
+    { "week": 9,  "topics": ["Event-Driven Architecture", "Serverless Architecture", "Analysing Architectures (demos)"], "assessments": ["Lab 08 due Mon 10am", "Lab 09 attendance task", "Assignment II Part 1 due Wed 3pm"] },
+    { "week": 10, "topics": ["Security By Design", "Course Review"], "assessments": ["Assignment II Part 2 due Wed 3pm"] }
+  ]
+}

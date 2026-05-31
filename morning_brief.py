@@ -133,6 +133,13 @@ try:
 except Exception:
     TERM_CONTEXT_AVAILABLE = False
 
+# ── Course schedule — this week's topics from course outlines (optional) ──────
+try:
+    import course_schedule
+    COURSE_SCHEDULE_AVAILABLE = True
+except Exception:
+    COURSE_SCHEDULE_AVAILABLE = False
+
 # Google OAuth scopes — these are the exact permissions we request
 # Gmail: read emails + send the brief back to you
 # Calendar: read your events
@@ -355,7 +362,7 @@ def fetch_emails(creds, hours_back=18, max_emails=15):
 #   - Your recent emails
 #   - Exact instructions for how to write the brief
 
-def build_prompt(profile_text, events, emails, today_str, checkin_summary=None, fitbit_data=None, finance_data=None, hevy_data=None, memory_data=None, jobs_data=None, overload_data=None, pokemon_data=None, tasks_data=None, daily_plan=None, proposals_text=None, term_data=None, term_flags=None):
+def build_prompt(profile_text, events, emails, today_str, checkin_summary=None, fitbit_data=None, finance_data=None, hevy_data=None, memory_data=None, jobs_data=None, overload_data=None, pokemon_data=None, tasks_data=None, daily_plan=None, proposals_text=None, term_data=None, term_flags=None, course_topics=None):
     """
     Constructs the full prompt sent to Claude.
     Returns a string.
@@ -444,6 +451,11 @@ def build_prompt(profile_text, events, emails, today_str, checkin_summary=None, 
                 lines.append(f"    • {a['subject']} — {a['name']}{weight} → due {a['due']} ({a['days_left']}d)")
         else:
             lines.append("  No assessment due dates filled in yet (update term_context.json when Moodle releases them).")
+
+        # This week's lecture/lab topics from the course outlines (course_schedule).
+        if course_topics:
+            for tline in course_topics.splitlines():
+                lines.append(f"  {tline}")
 
         internships = term_data.get("internships") or []
         if internships:
@@ -866,6 +878,13 @@ def run_brief():
         daily_plan = None
     
     # Fetch term data
+    course_topics = ""
+    if COURSE_SCHEDULE_AVAILABLE:
+        try:
+            course_topics = course_schedule.get_current_week_summary()
+        except Exception:
+            course_topics = ""
+
     term_data  = {}
     term_flags = []
     if TERM_CONTEXT_AVAILABLE:
@@ -877,7 +896,7 @@ def run_brief():
 
     # Build prompt and call Claude
     print("🧠  Generating brief with Claude...")
-    prompt = build_prompt(profile_text, events, emails, today_str, checkin_summary, fitbit_data, finance_data, hevy_data, memory_data, jobs_data, overload_data, pokemon_data, tasks_data, daily_plan, proposals_text, term_data, term_flags)
+    prompt = build_prompt(profile_text, events, emails, today_str, checkin_summary, fitbit_data, finance_data, hevy_data, memory_data, jobs_data, overload_data, pokemon_data, tasks_data, daily_plan, proposals_text, term_data, term_flags, course_topics)
     brief  = generate_brief(prompt)
     print("✅  Brief generated")
 

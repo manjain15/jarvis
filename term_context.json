@@ -10,13 +10,15 @@
   "subjects": [
     {
       "code": "COMP2511",
-      "name": "Object-Oriented Design & Programming",
+      "name": "Software Design and Architecture",
       "assessments": [
-        { "name": "Assignment 1", "due": null, "weight": null, "status": "pending" },
-        { "name": "Assignment 2", "due": null, "weight": null, "status": "pending" },
-        { "name": "Final Exam",   "due": null, "weight": null, "status": "pending" }
+        { "name": "Assignment 1 (OO Design)",            "due": "2026-07-01", "weight": 15, "status": "pending" },
+        { "name": "Assignment 2 Part 1 (Design Patterns)", "due": "2026-07-29", "weight": 12, "status": "pending" },
+        { "name": "Assignment 2 Part 2 (Architecture)",  "due": "2026-08-05", "weight": 8,  "status": "pending" },
+        { "name": "Coursework (weekly labs)",            "due": null,         "weight": 15, "status": "ongoing" },
+        { "name": "Final Exam",                          "due": null,         "weight": 50, "status": "pending" }
       ],
-      "notes": "Update due dates when released on Moodle."
+      "notes": "Labs due Mondays 10am. Final exam: in-person CSE labs, exam period; must score >=40% (20/50) to pass. Dates from 26T2 outline (subject to change)."
     },
     {
       "code": "MATH2601",
