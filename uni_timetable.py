@@ -26,7 +26,7 @@ Run directly to smoke-test the feed:
 """
 
 import datetime
-from urllib.request import urlopen
+from urllib.request import urlopen, Request
 
 import pytz
 
@@ -52,9 +52,14 @@ def _normalise_url(url):
 
 
 def _fetch_ics(url, timeout=15):
-    """Fetch the raw .ics bytes. Returns None on any network/HTTP error."""
+    """
+    Fetch the raw .ics bytes. Returns None on any network/HTTP error.
+    A browser User-Agent is required: UNSW's feed returns HTTP 403 to the
+    default urllib agent.
+    """
     try:
-        with urlopen(_normalise_url(url), timeout=timeout) as resp:
+        req = Request(_normalise_url(url), headers={"User-Agent": "Mozilla/5.0"})
+        with urlopen(req, timeout=timeout) as resp:
             return resp.read()
     except Exception:
         return None
