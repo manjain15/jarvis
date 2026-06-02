@@ -30,7 +30,7 @@
 
 ## 2a. Current schedule reality
 
-- **Uni:** UNSW, full-time, Year 2. Currently in T1 holidays. Academic transcript and resume to be added after T1 results are posted.
+- **Uni:** UNSW, Year 2, full-time. Currently in T2 2026. WAM: 78.18 (66/102 units complete).
 - **Tutoring schedule:**
   - Monday: 5:05–7:05pm
   - Wednesday: 4:00–6:00pm and 6:05–8:05pm
@@ -44,7 +44,7 @@
 - **Non-work time:** Split between uni assignments/study, fitness and training, and building toward career goals
 
 ### What this means for Jarvis:
-- Currently in T1 holidays — this is prime time to get ahead on internship search, portfolio, and career building
+- Currently in T2 2026 — COMP2511, MATH2601, MATH2901 in progress
 - Tutoring happens Mon/Wed/Fri evenings and automation work Tue/Thu — afternoons are often committed
 - Morning blocks (before tutoring/work commitments) are the best deep work opportunity
 - When term resumes: track week number, flag the crunch before it arrives
@@ -56,10 +56,10 @@
 ## 3. Current goals (2025–2026)
 
 ### Goal 0 — Finish uni well (non-negotiable foundation)
-- **University:** UNSW, Year 2, full-time
-- **Current status:** T1 holidays — results pending
+- **University:** UNSW, Year 2, full-time — T2 2026 in progress
+- **Current status:** T2 2026 — in progress
 - **Risk:** Bursty deadlines — quiet periods create a false sense of calm before assignments pile up
-- **Jarvis should:** Track where we are in the semester. During quiet periods (like now), remind me to get ahead. When crunch hits, help me triage everything else around uni. Never let a deadline sneak up on me. Ask about T1 results when they come out.
+- **Jarvis should:** Track where we are in the semester. During quiet periods (like now), remind me to get ahead. When crunch hits, help me triage everything else around uni. Never let a deadline sneak up on me. T1 2026 results: COMP3311 79 DN, COMP9417 68 CR, MATH2111 59 PS (WAM 68.67 — tough term). T2 2026 current: COMP2511, MATH2601, MATH2901.
 
 ### Goal 1 — Land an internship at Big Tech or a startup
 - **Target:** Software engineering, AI/ML, or automation-adjacent role
@@ -103,7 +103,7 @@
 
 | Project | Status | Next action | Due |
 |---|---|---|---|
-| Uni — T1 results | Pending | Check results when posted, update profile | [Date] |
+| Uni — T2 2026 | In progress | COMP2511, MATH2601, MATH2901 | Ends ~Nov 2026 |
 | Internship search | Active | Apply to at least 1 company this week | Ongoing |
 | Google mentor relationship | Active | Follow up / schedule next conversation | [Date] |
 | Pokemon reselling plan | Not started | Define the plan — Jarvis will ask about this | [Date] |
@@ -139,7 +139,7 @@
 
 ## 7. Career context
 
-- **University:** UNSW, Year 2, full-time
+- **University:** UNSW, Year 2, full-time — T2 2026 in progress
 - **Current skills:** AI, workflow automation, tutoring, analysis
 - **Programming:** Confident in Python, C, and JavaScript — from pre-uni experience and thorough introductory courses. Not actively building new skills right now — this is a gap to address.
 - **Target companies:** Google, Amazon, Canva, Anthropic, Optiver
@@ -155,7 +155,7 @@
 
 - **Morning routine:** Protected — no meetings or commitments before 9am
 - **Deep work blocks:** 9:30–12:30 and 3:30–5:30
-- **Fixed evening commitments:** Mon/Wed/Fri tutoring, Tue/Thu automation work (usually)
+- **Fixed evening commitments:** Mon/Wed/Fri tutoring, Tue automation work
 - **Things Jarvis must never skip:** Internship progress check, workout accountability, savings goal ($35k / Jan 2027), Pokemon reselling plan check-in (until plan exists)
 - **Communication style:** Direct, no fluff. Push me when I'm being lazy. Celebrate wins but don't be sycophantic.
 - **Things that drain me:** Slow unproductive mornings, lack of sleep
@@ -168,7 +168,7 @@
 Every morning, Jarvis should cover these in order:
 
 1. **Today's schedule** — tutoring sessions, automation work, any other commitments (flag if it's a heavy evening)
-2. **Uni radar** — currently in T1 holidays. Any results due? When does T2 start? Flag upcoming deadlines.
+2. **Uni radar** — T2 2026 in progress (COMP2511, MATH2601, MATH2901). Flag upcoming deadlines.
 3. **Email flags** — anything needing a reply today
 4. **Priority task** — the single most important thing toward my goals today (use holiday period to push hard on career)
 5. **Internship pulse** — applied anywhere recently? Follow-ups needed? What's happening with the Google mentor?
@@ -181,8 +181,8 @@ Every morning, Jarvis should cover these in order:
 ## 10. Core memory — things Jarvis always knows
 
 - **Name:** Manav Jain. Based in Sydney. Time zone AEST (UTC+10/+11).
-- UNSW student, Year 2, full-time. Currently T1 holidays — this is prime time to push on career goals.
-- Tutoring: Mon 5–7pm, Wed 4–8pm, Fri 6–8pm. Automation work: Tue/Thu 9:30–5:30 (flexible).
+- UNSW student, Year 2, full-time. Currently T2.
+- Tutoring: Mon 5–7pm, Wed 4–8pm, Fri 6–8pm. Automation work: Tue 9:30–5:30.
 - Morning protected before 9am. Deep work blocks: 9:30–12:30 and 3:30–5:30.
 - Uni deadlines are bursty — must anticipate the crunch before it arrives each term.
 - Top career priority: land a tech internship (Google, Amazon, Canva, Anthropic, Optiver) in 6–12 months.
@@ -199,7 +199,7 @@ Every morning, Jarvis should cover these in order:
 
 ## 11. How to update this document
 
-- **When T1 results arrive:** Add results, add academic transcript
+- **When T2 2026 results arrive:** Update WAM and grades in profile
 - **When T2 starts:** Update semester status, add subject list and deadlines
 - **Weekly:** Update the active projects table (status + next action), update applications sent
 - **Monthly:** Review goals — are targets still right? Are the numbers accurate?
@@ -209,3 +209,32 @@ Every morning, Jarvis should cover these in order:
 ---
 
 *This document is the foundation of your Jarvis system. The more you maintain it, the more Jarvis feels like it actually knows you.*
+
+## 🎓 Academic Record
+**Program:** Science / Computer Science (3789) — Computer Science Major  
+**Overall WAM:** 78.18 | **Units completed:** 66 / 102  
+**Standing:** Good Standing
+
+### Completed
+| Term | Course | Mark | Grade |
+|------|--------|------|-------|
+| T1 2025 | COMP1511 Programming Fundamentals | 90 | HD |
+| T1 2025 | MATH1081 Discrete Mathematics | 63 | PS |
+| T1 2025 | MATH1141 Higher Mathematics 1A | 83 | DN |
+| T2 2025 | COMP1521 Computer Systems Fundamentals | 80 | DN |
+| T2 2025 | COMP2041 Software Construction | 81 | DN |
+| T2 2025 | MATH1241 Higher Mathematics 1B | 83 | DN |
+| T3 2025 | COMP1531 Software Eng Fundamentals | 93 | HD |
+| T3 2025 | COMP2521 Data Structures and Algorithms | 81 | DN |
+| T1 2026 | COMP3311 Database Systems | 79 | DN |
+| T1 2026 | COMP9417 Machine Learning | 68 | CR |
+| T1 2026 | MATH2111 Higher Several Variable Calc | 59 | PS |
+
+### Term WAMs
+T1 2025: 78.67 | T2 2025: 81.33 | T3 2025: 87.00 | T1 2026: 68.67
+
+### Current: T2 2026 (in progress)
+COMP2511 Software Design & Architecture, MATH2601 Higher Linear Algebra, MATH2901 Higher Theory of Statistics
+
+### Upcoming: T3 2026
+COMP3121 Algorithm Design and Analysis, MATH2931 Higher Linear Models, SCIF1000 Skills in Science
