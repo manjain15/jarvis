@@ -314,8 +314,7 @@ def check_application_drought():
         days_str = "10 days" if now.weekday() == 0 else "this week"
         message = (
             f"No internship applications logged in the last {days_str}. "
-            f"T1 holidays are finite. Pick one company from your target list "
-            f"and apply today — Canva, Amazon, or Anthropic."
+            f"Pick one company from your target list and apply today — Canva, Amazon, or Anthropic."
         )
         sent = send_notification(
             title="📋 Application drought — {days_str} without applying",
