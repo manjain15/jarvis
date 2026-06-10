@@ -114,10 +114,10 @@ except Exception:
 
 # ── Pokemon reselling tracker (optional) ─────────────────────────────────────
 try:
-    from pokemon_tracker import get_pokemon_summary
-    POKEMON_AVAILABLE = True
+    from reselling_tracker import get_reselling_summary
+    RESELLING_AVAILABLE = True
 except Exception:
-    POKEMON_AVAILABLE = False
+    RESELLING_AVAILABLE = False
 
 # ── Hevy progressive overload (optional) ─────────────────────────────────────
 try:
@@ -156,6 +156,8 @@ SCOPES = [
     "https://www.googleapis.com/auth/calendar.readonly",
     "https://www.googleapis.com/auth/calendar.events",  # write: create/update events
     "https://www.googleapis.com/auth/tasks",             # Google Tasks read/write
+    "https://www.googleapis.com/auth/spreadsheets.readonly",
+    "https://www.googleapis.com/auth/drive.readonly",
     # Note: Google Health scopes are in a SEPARATE token (health_token.json)
     # due to a Google API bug — mixing health + consumer scopes causes 403 errors
 ]
@@ -437,7 +439,7 @@ def build_prompt(profile_text, events, emails, today_str, checkin_summary=None, 
     if pokemon_data:
         pokemon_section = pokemon_data
     else:
-        pokemon_section = "  No inventory file found — copy Excel to jarvis/pokemon/inventory.xlsx"
+        pokemon_section = "  Reselling tracker unavailable."
 
     tasks_section = tasks_data or "  Google Tasks not connected."
     plan_section  = daily_plan or "  Could not generate plan today."
@@ -880,6 +882,14 @@ def run_brief():
             print("💰  Finance data loaded")
         except Exception as e:
             print(f"⚠️   Finance fetch failed: {e}")
+
+    pokemon_data = None
+    if RESELLING_AVAILABLE:
+        try:
+            pokemon_data = get_reselling_summary()
+            print("🃏  Reselling data loaded")
+        except Exception as e:
+            print(f"⚠️   Reselling fetch failed: {e}")
 
     # Default all optional variables that may not have been set
     if 'overload_data' not in dir():

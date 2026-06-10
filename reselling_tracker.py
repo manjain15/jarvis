@@ -11,7 +11,6 @@ Statuses: Sold, In Stock, Paid Pending Shipping, Deposit Paid
 """
 
 import gspread
-from google.oauth2.service_account import Credentials
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
@@ -82,13 +81,19 @@ class Item:
 # ── Sheet reading ─────────────────────────────────────────────────────────────
 
 def _connect_sheet() -> gspread.Worksheet:
-    scopes = [
-        "https://www.googleapis.com/auth/spreadsheets.readonly",
-        "https://www.googleapis.com/auth/drive.readonly",
-    ]
-    creds = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=scopes)
-    gc    = gspread.authorize(creds)
-    sh    = gc.open(SPREADSHEET_NAME)
+    from google.oauth2.credentials import Credentials as OAuthCredentials
+    from google.auth.transport.requests import Request
+
+    token_file = os.path.expanduser("~/jarvis/token.json")
+    creds = OAuthCredentials.from_authorized_user_file(token_file)
+
+    if creds.expired and creds.refresh_token:
+        creds.refresh(Request())
+        with open(token_file, "w") as f:
+            f.write(creds.to_json())
+
+    gc = gspread.authorize(creds)
+    sh = gc.open(SPREADSHEET_NAME)
     return sh.worksheet(SHEET_TAB_NAME)
 
 
