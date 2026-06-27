@@ -1,6 +1,6 @@
 # Jarvis — Personal Profile Document
 > This document is read by Jarvis at the start of every session. Keep it updated. The more accurate it is, the more useful Jarvis becomes.
-> Last updated: May 2026
+> Last updated: June 2026
 
 ---
 
@@ -35,8 +35,9 @@
   - Monday: 5:05–7:05pm
   - Wednesday: 4:00–6:00pm and 6:05–8:05pm
   - Friday: 6:00–8:00pm
-- **Automation work:** Usually Tuesday and Thursday 9:30–5:30, but flexible — update when this changes.
+- **Automation work:** Tuesday only, 9:30–5:30.
 - **Fixed commitments pattern:** Scattered throughout the day — no clean protected blocks guaranteed
+- **Uni in-person (T2):** Wednesday 12–2pm class; Thursday full day on campus for study
 - **Protected morning routine:** No meetings or commitments before 9am
 - **Deep work blocks:** 9:30–12:30 and 3:30–5:30 (when schedule allows)
 - **Flexible time:** The gaps between fixed commitments — needs to be used intentionally
@@ -72,7 +73,7 @@
   - Portfolio projects and GitHub presence
   - Interview prep (LeetCode, system design, behavioural)
   - LinkedIn profile kept sharp and active
-- **Current status:** No applications this month. Last month: Google, TikTok, Canva. Awaiting outcomes. Currently talking with a Google employee who is mentoring me.
+- **Current status:** Applications this month: Vontier (ML Intern, Gen AI Intern). Last month: Google, TikTok, Canva. Awaiting outcomes. Currently talking with a Google employee who is mentoring me.
 - **Networking status:** Light — needs to increase
 - **Jarvis should:** Flag if I haven't applied anywhere this week. Remind me to follow up. Ask about progress with my Google mentor. Push me to network more actively.
 
@@ -104,9 +105,9 @@
 | Project | Status | Next action | Due |
 |---|---|---|---|
 | Uni — T2 2026 | In progress | COMP2511, MATH2601, MATH2901 | Ends ~Nov 2026 |
-| Internship search | Active | Apply to at least 1 company this week | Ongoing |
+| Internship search | Active | Apply to at least 1 company this week. Canva — OA completed, awaiting interview invite | Ongoing |
 | Google mentor relationship | Active | Follow up / schedule next conversation | [Date] |
-| Pokemon reselling plan | Not started | Define the plan — Jarvis will ask about this | [Date] |
+| Pokemon reselling plan | Active | Bot secured one First Partner Collection box — track arrival and next purchase opportunity | Ongoing |
 | Passion project | Ideation | Define concept, write a 1-pager | [Date] |
 | Portfolio / GitHub | Building | Push latest project to GitHub | [Date] |
 | LinkedIn profile | Needs update | Add recent role + skills | [Date] |
@@ -118,8 +119,9 @@
 - **Relationship with money:** Saving aggressively toward a specific goal
 - **Goal:** University exchange in the US — January 2027
 - **Target amount:** $35,000
-- **Current savings rate:** ~$2,500 of earning $2,880/month
-- **Side hustle in progress:** Planning to invest a lump sum into Pokemon card reselling — should significantly boost savings. Plan not yet defined. Jarvis should ask about this regularly until there is a concrete plan.
+- **Current savings:** $8,242.78 of $35,000 (23.6%) — currently behind pace, projected to hit target April 2027 at current rate. **Savings rate:** ~$2,500 of earning $2,880/month
+- **Current savings balance:** $8,835.28 of $35,000 (25.2%) — behind pace — projected completion May 2027 at current rate.
+- **Side hustle in progress:** Pokemon card reselling — active and underway. First sale completed: sold a booster box for $310 (bought at $300), decent margin given market was below $300. Plan is live — Jarvis should track ongoing progress and profit.
 - **Jarvis should:** Remind me of the $35k target and January 2027 deadline. Flag if spending is unusually high. Prompt a monthly financial review. Ask about the Pokemon reselling plan until it exists.
 
 ---
@@ -129,8 +131,8 @@
 - **Current training:** Gym 5x/week — following PPLRUSHR split (Monday - Push, Tuesday - Pull, Wednesday - Legs, Thursday - Rest, Friday - Upper, Saturday - SHARMS (Shoulders + Arms), Sunday - Rest)
 - **Diet approach:** Intuitive eating currently. Vegetarian at home, non-veg outside. Prioritising protein. Open to tracking if plateau hits.
 - **Sleep target:** 7–8 hours
-  - **Sleep flag:** 2nd consecutive night significantly below target (last night: 4h 46m) — pattern confirmed, not a one-off.
-- **Current weight:** ~71kg
+  - **Sleep flag:** None active — sleep has recovered. Last night: 7h 17m (above target).
+- **Current weight:** ~72kg
 - **Target:** ~65–67kg, lean physique with clear muscle definition, ~15% body fat
 - **Wearable / tracker:** Fitbit Versa 3
 - **Jarvis should:** Ask about sleep and training daily. Track weekly consistency. Celebrate streaks, flag slumps. Nudge toward calorie tracking if weight progress stalls.
@@ -145,9 +147,9 @@
 - **Target companies:** Google, Amazon, Canva, Anthropic, Optiver
 - **Target roles:** Software Engineer Intern, AI Engineer Intern, ML Intern
 - **Networking status:** Light — the Google mentor relationship is the main active thread. Need to increase overall.
-- **Applications sent this month:** None
-- **Applications last month:** Google, TikTok, Canva — awaiting outcomes
-- **Active conversations:** Google employee mentor — ongoing
+- **Applications sent this month:** Vontier (ML Intern, Gen AI Intern)
+- **Applications last month:** Google, TikTok, Canva — Google and TikTok outcomes unknown; Canva OA completed, awaiting interview invite.
+- **Active conversations:** Google employee mentor — ongoing. Last contact: 2 June 2026. Awaiting her response regarding startups Manav mentioned.
 
 ---
 
@@ -155,7 +157,7 @@
 
 - **Morning routine:** Protected — no meetings or commitments before 9am
 - **Deep work blocks:** 9:30–12:30 and 3:30–5:30
-- **Fixed evening commitments:** Mon/Wed/Fri tutoring, Tue automation work
+- **Fixed evening commitments:** Mon/Wed/Fri tutoring, Tue automation work. Wed 12–2pm uni class. Thu full day on campus (study).
 - **Things Jarvis must never skip:** Internship progress check, workout accountability, savings goal ($35k / Jan 2027), Pokemon reselling plan check-in (until plan exists)
 - **Communication style:** Direct, no fluff. Push me when I'm being lazy. Celebrate wins but don't be sycophantic.
 - **Things that drain me:** Slow unproductive mornings, lack of sleep
@@ -182,15 +184,15 @@ Every morning, Jarvis should cover these in order:
 
 - **Name:** Manav Jain. Based in Sydney. Time zone AEST (UTC+10/+11).
 - UNSW student, Year 2, full-time. Currently T2.
-- Tutoring: Mon 5–7pm, Wed 4–8pm, Fri 6–8pm. Automation work: Tue 9:30–5:30.
+- Tutoring: Mon 5–7pm, Wed 4–8pm, Fri 6–8pm. Automation work: Tue only, 9:30–5:30. Uni in-person: Wed 12–2pm class, Thu full day on campus.
 - Morning protected before 9am. Deep work blocks: 9:30–12:30 and 3:30–5:30.
 - Uni deadlines are bursty — must anticipate the crunch before it arrives each term.
 - Top career priority: land a tech internship (Google, Amazon, Canva, Anthropic, Optiver) in 6–12 months.
 - Currently being mentored by a Google employee — this relationship matters, keep it warm.
 - Confident in Python, C, JavaScript. Not actively building new skills right now — flag this as a gap.
-- Gym 5x/week (PPLRUSHR split). Currently ~71kg. Target: 65–67kg, ~15% body fat.
+- Gym 5x/week (PPLRUSHR split). Currently ~72kg. Target: 65–67kg, ~15% body fat.
 - Saving $35k for US exchange in January 2027. Income ~$2,880/month, saving ~95%.
-- Pokemon reselling plan not yet defined — ask about it until it exists.
+- Pokemon reselling plan active — bot executed first purchase: one First Partner Collection box secured. Continue tracking ongoing purchases and profit.
 - Has a passion project to ship — hold me accountable.
 - Responds well to being pushed, not babied.
 - Prefers concise, direct communication — no fluff.
@@ -211,8 +213,8 @@ Every morning, Jarvis should cover these in order:
 *This document is the foundation of your Jarvis system. The more you maintain it, the more Jarvis feels like it actually knows you.*
 
 ## 🎓 Academic Record
-**Program:** Science / Computer Science (3789) — Computer Science Major  
-**Overall WAM:** 78.18 | **Units completed:** 66 / 102  
+**Program:** Science / Computer Science (3789) — Computer Science Major
+**Overall WAM:** 78.18 | **Units completed:** 66 / 102
 **Standing:** Good Standing
 
 ### Completed
@@ -227,14 +229,4 @@ Every morning, Jarvis should cover these in order:
 | T3 2025 | COMP1531 Software Eng Fundamentals | 93 | HD |
 | T3 2025 | COMP2521 Data Structures and Algorithms | 81 | DN |
 | T1 2026 | COMP3311 Database Systems | 79 | DN |
-| T1 2026 | COMP9417 Machine Learning | 68 | CR |
-| T1 2026 | MATH2111 Higher Several Variable Calc | 59 | PS |
-
-### Term WAMs
-T1 2025: 78.67 | T2 2025: 81.33 | T3 2025: 87.00 | T1 2026: 68.67
-
-### Current: T2 2026 (in progress)
-COMP2511 Software Design & Architecture, MATH2601 Higher Linear Algebra, MATH2901 Higher Theory of Statistics
-
-### Upcoming: T3 2026
-COMP3121 Algorithm Design and Analysis, MATH2931 Higher Linear Models, SCIF1000 Skills in Science
+| T1 2026 | COMP9417

@@ -277,13 +277,27 @@ Example: "- Sleep 5h12m (3rd consecutive night below target). Missed Push day. N
 Example: "- Hit new PB on bench press: 80kg×5. Sleep 7h45m — good recovery. Sent application to Atlassian."]
 
 ---SEMANTIC_UPDATES---
-[List ONLY facts that have CHANGED or are NEW since the current semantic memory.
-If nothing has changed, write "No updates."
-Format each update as: "UPDATE [section]: [old fact] → [new fact]"
+[List ONLY stable facts that have CHANGED or are NEW since the current semantic memory.
+
+CRITICAL — NEVER include in semantic updates:
+- Daily sleep duration or sleep flags (belongs in episodic only)
+- Daily resting HR readings (belongs in episodic only)
+- Daily savings balance (only update if a new CSV was uploaded with a significantly different figure)
+- Daily weight readings (only update if weight has been stable at a new value for 2+ weeks)
+- Anything that will be different tomorrow
+
+ONLY update semantic memory for:
+- New job applications sent (running list)
+- Career milestones (interview outcomes, mentor contacts)
+- Project status changes (assignment submitted, exam done)
+- Permanent schedule changes
+- Weight if it has clearly shifted and held for weeks
+
+If nothing stable has changed, write "No updates."
+Format: "UPDATE [section]: [old fact] → [new fact]"
 Or for new facts: "ADD [section]: [new fact]"
-Example: "UPDATE Career: No applications sent in May → 1 application sent to Atlassian (May 14)"
-Example: "ADD Health: Sleep consistently below target for 3+ days — potential pattern to watch"
-Only update things that are genuinely different. Don't restate what's already in semantic memory.]"""
+Example: "UPDATE Career: Vontier applications pending → also sent Optus Networks Intern June 10"
+Example: "UPDATE Academic: COMP2511 A1 in progress → submitted July 1"]"""
 
     message = client.messages.create(
         model="claude-sonnet-4-6",

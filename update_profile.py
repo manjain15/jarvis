@@ -149,16 +149,32 @@ Respond in this exact JSON format (array of proposals, or empty array if nothing
   }}
 ]
 
+CRITICAL RULE — NEVER propose updates for transient/dynamic data. These change daily and must NOT be written into profile.md:
+- Sleep flags or last night's sleep duration
+- Current savings balance or savings projections
+- Today's or yesterday's workout
+- Current weight (unless it's changed significantly and held for 2+ weeks)
+- Any data that will be different tomorrow
+
+ONLY propose updates for stable, slowly-changing facts:
+- Schedule changes (e.g. tutoring hours changed permanently)
+- New applications sent (running total, not individual nights)
+- Career milestones (mentor last contact, interview outcomes)
+- Projects changing phase or status
+- University course changes
+
 Examples of GOOD proposals:
-- Current weight was 71kg, Hevy data shows consistent training suggesting progress → propose weight check
 - Applications sent this month was None, but a new application was logged → update applications count
 - Pokemon reselling plan now defined based on check-in → update from undefined to defined
+- Tutoring schedule permanently changed → update fixed commitments
 
-Examples of BAD proposals (don't make these):
+Examples of BAD proposals (never make these):
+- Anything mentioning sleep, last night, last night's sleep, sleep flag
+- Savings balance or projected date (changes with every CSV upload)
+- Weight unless it's been stable at a new value for weeks
 - Vague suggestions like "consider updating goals"
 - Things already accurate in the profile
 - Speculative updates not backed by actual data
-- Updates to stable facts like name, degree, target companies
 
 Return ONLY the JSON array, nothing else."""
 
@@ -331,6 +347,7 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Jarvis Profile Update System")
     parser.add_argument("--list", action="store_true", help="List pending proposals")
+    parser.add_argument("--yes",  action="store_true", help="Accept all pending proposals in one API call")
     args = parser.parse_args()
 
     if args.list:
@@ -342,5 +359,25 @@ if __name__ == "__main__":
             for p in pending:
                 print(f"  [{p['id']}] {p['section']}: {p['proposed_value'][:80]}")
             print()
+    elif args.yes:
+        pending = get_pending_proposals()
+        if not pending:
+            print("\n✅  No pending proposals.\n")
+        else:
+            print(f"\n⚡  Accepting all {len(pending)} proposal(s) in one shot...\n")
+            for p in pending:
+                print(f"  ✔  [{p['id']}] {p['section']}: {p['proposed_value'][:80]}")
+            print()
+            if apply_all_updates(pending):
+                proposals = load_proposals()
+                resolved = datetime.datetime.now(pytz.timezone(config.TIMEZONE)).strftime("%Y-%m-%d")
+                for proposal in proposals:
+                    if proposal["status"] == "pending":
+                        proposal["status"] = "approved"
+                        proposal["resolved_date"] = resolved
+                save_proposals(proposals)
+                print(f"\n✅  All {len(pending)} update(s) applied to profile.md\n")
+            else:
+                print("\n❌  Batch apply failed — profile unchanged\n")
     else:
         review_proposals()
