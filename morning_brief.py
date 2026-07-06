@@ -891,16 +891,31 @@ def run_brief():
         except Exception as e:
             print(f"⚠️   Reselling fetch failed: {e}")
 
-    # Default all optional variables that may not have been set
-    if 'overload_data' not in dir():
-        overload_data = None
-    if 'pokemon_data' not in dir():
-        pokemon_data = None
-    if 'tasks_data' not in dir():
-        tasks_data = None
-    if 'daily_plan' not in dir():
-        daily_plan = None
-    
+    # Fetch progressive overload analysis
+    overload_data = None
+    if OVERLOAD_AVAILABLE:
+        try:
+            overload_data = get_overload_summary()
+            print("📈  Overload analysis loaded")
+        except Exception as e:
+            print(f"⚠️   Overload analysis failed: {e}")
+
+    # Fetch Google Tasks + generate today's time-blocked plan
+    tasks_data = None
+    daily_plan = None
+    if CALENDAR_WRITE:
+        try:
+            tasks_data = get_tasks_summary()
+            print("📝  Tasks loaded")
+        except Exception as e:
+            print(f"⚠️   Tasks fetch failed: {e}")
+        try:
+            daily_plan = generate_daily_plan(memory_text=memory_data or "")
+            print("🗓   Daily plan generated")
+        except Exception as e:
+            print(f"⚠️   Daily plan failed: {e}")
+
+
     # Fetch term data
     course_topics = ""
     if COURSE_SCHEDULE_AVAILABLE:

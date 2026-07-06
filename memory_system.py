@@ -85,7 +85,7 @@ def init_memory():
 def load_todays_data():
     """
     Aggregates all available data from today for memory processing.
-    Returns a formatted string.
+    Returns (formatted string, list of today's voice interactions).
     """
     tz        = TIMEZONE
     today     = datetime.datetime.now(tz).date()
@@ -222,7 +222,8 @@ def load_todays_data():
     except Exception:
         pass
 
-    return "\n\n".join(sections) if sections else "No data available for today."
+    text = "\n\n".join(sections) if sections else "No data available for today."
+    return text, today_interactions
 
 
 # ── Generate memory entries ───────────────────────────────────────────────────
@@ -431,7 +432,7 @@ def run_memory_update():
     init_memory()
 
     print("📊  Loading today's data...")
-    today_data = load_todays_data()
+    today_data, today_interactions = load_todays_data()
 
     print("🤖  Generating memory entries...")
     episodic_entry, semantic_updates = generate_memory_entries(today_data)
@@ -509,8 +510,7 @@ def run_memory_update():
         except Exception as e:
             print(f"⚠️   Mem0 update failed: {e}")
 
-        today_interactions = []
-    # Feed voice interactions into Mem0 separately
+        # Feed voice interactions into Mem0 separately
         # Each Q&A is added individually so Mem0 can extract specific facts
         if today_interactions:
             print(f"🎙️   Adding {len(today_interactions)} voice interaction(s) to Mem0...")
