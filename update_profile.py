@@ -320,6 +320,67 @@ Do not add commentary, do not change anything else."""
         return False
 
 
+def apply_all_updates(proposals_to_apply):
+    """
+    Applies a batch of proposals to profile.md in a single Claude call.
+    Returns True if the profile was updated.
+    """
+    if not PROFILE_FILE.exists() or not proposals_to_apply:
+        return False
+
+    profile_text = PROFILE_FILE.read_text()
+    client       = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
+
+    tz       = pytz.timezone(config.TIMEZONE)
+    today    = datetime.datetime.now(tz).date()
+    date_str = today.strftime("%B %Y")
+
+    changes = "\n\n".join(
+        f"CHANGE {i}:\n"
+        f"Section: {p['section']}\n"
+        f"Find this text: {p['current_value']}\n"
+        f"Replace with: {p['proposed_value']}"
+        for i, p in enumerate(proposals_to_apply, 1)
+    )
+
+    prompt = f"""Update this profile.md document by applying every change listed below.
+
+CURRENT PROFILE.MD:
+{profile_text}
+
+CHANGES TO APPLY:
+{changes}
+
+Also update the "Last updated" date at the top to: {date_str}
+
+Return the complete updated profile.md document. Make ONLY the specified changes plus the date update.
+Do not add commentary, do not change anything else."""
+
+    try:
+        message = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=4000,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        updated = message.content[0].text.strip()
+
+        updated = re.sub(r"^```markdown\s*", "", updated)
+        updated = re.sub(r"^```\s*", "", updated)
+        updated = re.sub(r"\s*```$", "", updated)
+
+        # Back up the current profile before overwriting
+        backup_path = SCRIPT_DIR / f"profile_backup_{today.strftime('%Y%m%d')}.md"
+        if not backup_path.exists():
+            backup_path.write_text(profile_text)
+            print(f"  📦  Backup saved to {backup_path.name}")
+
+        PROFILE_FILE.write_text(updated)
+        return True
+    except Exception as e:
+        print(f"  ❌  Failed to apply updates: {e}")
+        return False
+
+
 # ── Interactive review CLI ────────────────────────────────────────────────────
 
 def review_proposals():

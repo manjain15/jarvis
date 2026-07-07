@@ -308,9 +308,32 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Jarvis Term Context Update System")
     parser.add_argument("--list", action="store_true", help="List pending proposals")
+    parser.add_argument("--yes",  action="store_true", help="Apply all pending proposals without prompting")
     args = parser.parse_args()
 
-    if args.list:
+    if args.yes:
+        pending = get_pending_proposals()
+        if not pending:
+            print("\n✅  No pending term proposals.\n")
+        else:
+            print(f"\n⚡  Applying all {len(pending)} term proposal(s)...\n")
+            proposals = load_proposals()
+            today_iso = datetime.datetime.now(TIMEZONE).strftime("%Y-%m-%d")
+            applied = 0
+            for p in pending:
+                if apply_update(p):
+                    for proposal in proposals:
+                        if proposal["id"] == p["id"]:
+                            proposal["status"] = "approved"
+                            proposal["resolved_date"] = today_iso
+                    applied += 1
+                    print(f"  ✔  [{p['id']}] {p['summary']}")
+                else:
+                    print(f"  ❌  [{p['id']}] {p['summary']} — failed, left pending")
+            save_proposals(proposals)
+            print(f"\n✅  {applied}/{len(pending)} applied to term_context.json\n")
+
+    elif args.list:
         pending = get_pending_proposals()
         if not pending:
             print("\n✅  No pending term proposals.\n")
