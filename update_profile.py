@@ -57,8 +57,12 @@ def is_transient_proposal(proposed_value, reason=""):
     Returns True if a proposal looks like transient/daily data that should
     never be written into profile.md (savings snapshots, sleep, temporary
     illness, this-week schedule quirks).
+
+    Only the proposed value is checked — the reason field legitimately
+    references "today's check-in" as evidence, which says nothing about
+    whether the proposed content itself is transient.
     """
-    text = f"{proposed_value} {reason}".lower()
+    text = proposed_value.lower()
     return any(re.search(p, text) for p in TRANSIENT_PATTERNS)
 
 
