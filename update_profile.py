@@ -297,9 +297,13 @@ Do not add commentary, do not change anything else."""
     try:
         message = client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=4000,
+            max_tokens=8000,
             messages=[{"role": "user", "content": prompt}]
         )
+        # A truncated rewrite silently destroys the tail of profile.md
+        if message.stop_reason == "max_tokens":
+            print("  ❌  Rewrite hit the token limit — profile NOT updated (would truncate)")
+            return False
         updated = message.content[0].text.strip()
 
         # Strip markdown fences if Claude wrapped it
@@ -359,9 +363,13 @@ Do not add commentary, do not change anything else."""
     try:
         message = client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=4000,
+            max_tokens=8000,
             messages=[{"role": "user", "content": prompt}]
         )
+        # A truncated rewrite silently destroys the tail of profile.md
+        if message.stop_reason == "max_tokens":
+            print("  ❌  Rewrite hit the token limit — profile NOT updated (would truncate)")
+            return False
         updated = message.content[0].text.strip()
 
         updated = re.sub(r"^```markdown\s*", "", updated)
