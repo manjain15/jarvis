@@ -1,6 +1,6 @@
 # Jarvis — Personal Profile Document
 > This document is read by Jarvis at the start of every session. Keep it updated. The more accurate it is, the more useful Jarvis becomes.
-> Last updated: June 2026
+> Last updated: July 2026
 
 ---
 
@@ -37,7 +37,7 @@
   - Friday: 6:00–8:00pm
 - **Automation work:** Tuesday only, 9:30–5:30.
 - **Fixed commitments pattern:** Scattered throughout the day — no clean protected blocks guaranteed
-- **Uni in-person (T2):** Wednesday 12–2pm class; Thursday full day on campus for study
+- **Uni in-person (T2):** Wednesday 12–2pm class; Thursday full day on campus for study. Note: makeup tutoring lessons can fall on Tuesdays — flag when automation work day (9:30–5:30) overlaps with an evening tutoring session.
 - **Protected morning routine:** No meetings or commitments before 9am
 - **Deep work blocks:** 9:30–12:30 and 3:30–5:30 (when schedule allows)
 - **Flexible time:** The gaps between fixed commitments — needs to be used intentionally
@@ -107,7 +107,7 @@
 | Uni — T2 2026 | In progress | COMP2511, MATH2601, MATH2901 | Ends ~Nov 2026 |
 | Internship search | Active | Apply to at least 1 company this week. Canva — OA completed, awaiting interview invite | Ongoing |
 | Google mentor relationship | Active | Follow up / schedule next conversation | [Date] |
-| Pokemon reselling plan | Active | Bot secured one First Partner Collection box — track arrival and next purchase opportunity | Ongoing |
+| Pokemon reselling plan | Active | Bot set to monitor Kmart for FP3 drop — track next purchase opportunity | Ongoing |
 | Passion project | Ideation | Define concept, write a 1-pager | [Date] |
 | Portfolio / GitHub | Building | Push latest project to GitHub | [Date] |
 | LinkedIn profile | Needs update | Add recent role + skills | [Date] |
@@ -192,7 +192,7 @@ Every morning, Jarvis should cover these in order:
 - Confident in Python, C, JavaScript. Not actively building new skills right now — flag this as a gap.
 - Gym 5x/week (PPLRUSHR split). Currently ~72kg. Target: 65–67kg, ~15% body fat.
 - Saving $35k for US exchange in January 2027. Income ~$2,880/month, saving ~95%.
-- Pokemon reselling plan active — bot executed first purchase: one First Partner Collection box secured. Continue tracking ongoing purchases and profit.
+- Pokemon reselling plan active — bot executed first purchase: one First Partner Collection box secured. Bot now monitoring Kmart for FP3 drop. Continue tracking ongoing purchases and profit.
 - Has a passion project to ship — hold me accountable.
 - Responds well to being pushed, not babied.
 - Prefers concise, direct communication — no fluff.
