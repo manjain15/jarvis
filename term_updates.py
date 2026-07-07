@@ -77,8 +77,11 @@ def add_proposal(action, params, summary, reason):
 
     proposals = load_proposals()
     key = _dedup_key(action, params)
+    # Check every status, not just pending: a rejected proposal must not be
+    # re-queued nightly from the same evidence, and an approved one is already
+    # applied so re-proposing it is redundant.
     for p in proposals:
-        if p["status"] == "pending" and _dedup_key(p["action"], p["params"]) == key:
+        if _dedup_key(p["action"], p["params"]) == key:
             return False
 
     now = datetime.datetime.now(TIMEZONE)
