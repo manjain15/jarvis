@@ -35,6 +35,33 @@ MEMORY_DIR.mkdir(exist_ok=True)
 TIMEZONE = pytz.timezone(config.TIMEZONE)
 
 
+# ── Transient-proposal guard ──────────────────────────────────────────────────
+# The generation prompt bans these, but the LLM doesn't always comply. This is
+# the deterministic backstop: anything matching these patterns is daily/weekly
+# noise and must never become a permanent profile.md edit.
+TRANSIENT_PATTERNS = [
+    r"savings balance",
+    r"\$[\d,]+(\.\d{2})?\s*of\s*\$35",   # "$9,942.30 of $35,000" balance snapshots
+    r"behind pace",
+    r"\bprojected\b",
+    r"\bsleep\b",
+    r"last night",
+    r"this week",
+    r"\btoday\b|\byesterday\b",
+    r"feeling sick|is sick|illness|currently paused|paused due to",
+]
+
+
+def is_transient_proposal(proposed_value, reason=""):
+    """
+    Returns True if a proposal looks like transient/daily data that should
+    never be written into profile.md (savings snapshots, sleep, temporary
+    illness, this-week schedule quirks).
+    """
+    text = f"{proposed_value} {reason}".lower()
+    return any(re.search(p, text) for p in TRANSIENT_PATTERNS)
+
+
 # ── Proposal management ───────────────────────────────────────────────────────
 
 def load_proposals():
@@ -52,16 +79,27 @@ def save_proposals(proposals):
     PROPOSALS_FILE.write_text(json.dumps(proposals, indent=2, default=str))
 
 
+def _normalise(text):
+    """Collapses whitespace and lowercases for fuzzy proposal comparison."""
+    return re.sub(r"\s+", " ", text).strip().lower()
+
+
 def add_proposal(section, current_value, proposed_value, reason):
     """
-    Adds a new proposal if it's not already pending.
-    Returns True if added, False if duplicate.
+    Adds a new proposal if it passes the transient filter and isn't a
+    near-duplicate of an existing one. Returns True if added.
     """
+    # Deterministic backstop: never queue transient/daily data
+    if is_transient_proposal(proposed_value, reason):
+        return False
+
     proposals = load_proposals()
 
-    # Check for duplicate
+    # Near-duplicate check: same section + same opening text. Balance figures
+    # and dates mutate slightly each night, so exact match isn't enough.
+    new_key = _normalise(proposed_value)[:100]
     for p in proposals:
-        if p["section"] == section and p["proposed_value"] == proposed_value:
+        if p["section"] == section and _normalise(p["proposed_value"])[:100] == new_key:
             return False
 
     tz  = pytz.timezone(config.TIMEZONE)
@@ -346,11 +384,35 @@ def review_proposals():
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Jarvis Profile Update System")
-    parser.add_argument("--list", action="store_true", help="List pending proposals")
-    parser.add_argument("--yes",  action="store_true", help="Accept all pending proposals in one API call")
+    parser.add_argument("--list",  action="store_true", help="List pending proposals")
+    parser.add_argument("--yes",   action="store_true", help="Accept all pending proposals in one API call")
+    parser.add_argument("--prune", action="store_true", help="Auto-reject pending proposals that are transient or near-duplicates")
     args = parser.parse_args()
 
-    if args.list:
+    if args.prune:
+        proposals = load_proposals()
+        resolved  = datetime.datetime.now(TIMEZONE).strftime("%Y-%m-%d")
+        seen_keys = set()
+        pruned    = 0
+        for p in proposals:
+            if p["status"] != "pending":
+                continue
+            key = (p["section"], _normalise(p["proposed_value"])[:100])
+            if is_transient_proposal(p["proposed_value"], p.get("reason", "")):
+                p["status"], p["resolved_date"] = "rejected", resolved
+                print(f"  🧹  [{p['id']}] transient — {p['proposed_value'][:70]}")
+                pruned += 1
+            elif key in seen_keys:
+                p["status"], p["resolved_date"] = "rejected", resolved
+                print(f"  🧹  [{p['id']}] duplicate — {p['proposed_value'][:70]}")
+                pruned += 1
+            else:
+                seen_keys.add(key)
+        save_proposals(proposals)
+        remaining = len(get_pending_proposals())
+        print(f"\n✅  Pruned {pruned} proposal(s); {remaining} still pending.\n")
+
+    elif args.list:
         pending = get_pending_proposals()
         if not pending:
             print("\n✅  No pending proposals.\n")
