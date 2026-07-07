@@ -231,3 +231,12 @@ Every morning, Jarvis should cover these in order:
 | T1 2026 | COMP3311 Database Systems | 79 | DN |
 | T1 2026 | COMP9417 Machine Learning | 68 | CR |
 | T1 2026 | MATH2111 Higher Several Variable Calc | 59 | PS |
+
+### Term WAMs
+T1 2025: 78.67 | T2 2025: 81.33 | T3 2025: 87.00 | T1 2026: 68.67
+
+### Current: T2 2026 (in progress)
+COMP2511 Software Design & Architecture, MATH2601 Higher Linear Algebra, MATH2901 Higher Theory of Statistics
+
+### Upcoming: T3 2026
+COMP3121 Algorithm Design and Analysis, MATH2931 Higher Linear Models, SCIF1000 Skills in Science
