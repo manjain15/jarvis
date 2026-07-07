@@ -229,4 +229,5 @@ Every morning, Jarvis should cover these in order:
 | T3 2025 | COMP1531 Software Eng Fundamentals | 93 | HD |
 | T3 2025 | COMP2521 Data Structures and Algorithms | 81 | DN |
 | T1 2026 | COMP3311 Database Systems | 79 | DN |
-| T1 2026 | COMP9417
+| T1 2026 | COMP9417 Machine Learning | 68 | CR |
+| T1 2026 | MATH2111 Higher Several Variable Calc | 59 | PS |
