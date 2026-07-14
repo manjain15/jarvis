@@ -1,0 +1,29 @@
+name: Deploy to VPS
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: vps-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          echo "${{ secrets.VPS_HOST_KEY }}" > ~/.ssh/known_hosts
+
+      - name: Deploy
+        run: |
+          # The deploy key is a forced-command key: the VPS runs
+          # deploy/vps-deploy.sh regardless of the command given here.
+          ssh -i ~/.ssh/deploy_key \
+              -o StrictHostKeyChecking=yes \
+              "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" deploy
