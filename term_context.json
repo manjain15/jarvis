@@ -15,7 +15,7 @@
           "name": "Assignment 1 (OO Design)",
           "due": "2026-07-01",
           "weight": 15,
-          "status": "pending"
+          "status": "submitted"
         },
         {
           "name": "Assignment 2 Part 1 (Design Patterns)",
@@ -63,7 +63,7 @@
           "name": "Short Assignment",
           "due": "2026-07-12",
           "weight": 10,
-          "status": "pending"
+          "status": "submitted"
         },
         {
           "name": "Class Test 2",
