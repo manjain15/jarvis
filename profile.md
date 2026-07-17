@@ -34,7 +34,6 @@
 - **Tutoring schedule:**
   - Monday: 5:05–7:05pm
   - Wednesday: 4:00–6:00pm and 6:05–8:05pm
-  - Friday: 6:00–8:00pm
 - **Automation work:** Tuesday only, 9:30–5:30.
 - **Fixed commitments pattern:** Scattered throughout the day — no clean protected blocks guaranteed
 - **Uni in-person (T2):** Wednesday 12–2pm class; Thursday full day on campus for study. Note: makeup tutoring lessons can fall on Tuesdays — flag when automation work day (9:30–5:30) overlaps with an evening tutoring session.
@@ -119,7 +118,7 @@
 - **Relationship with money:** Saving aggressively toward a specific goal
 - **Goal:** University exchange in the US — January 2027
 - **Target amount:** $35,000
-- **Current savings:** $8,242.78 of $35,000 (23.6%) — currently behind pace, projected to hit target April 2027 at current rate. **Savings rate:** ~$2,500 of earning $2,880/month
+- **Current savings:** $8,242.78 of $35,000 (23.6%) — currently behind pace, projected to hit target April 2027 at current rate. **Current savings rate:** ~$1,670/month of earning ~$1,760/month
 - **Current savings balance:** $8,835.28 of $35,000 (25.2%) — behind pace — projected completion May 2027 at current rate.
 - **Side hustle in progress:** Pokemon card reselling — active and underway. First sale completed: sold a booster box for $310 (bought at $300), decent margin given market was below $300. Plan is live — Jarvis should track ongoing progress and profit.
 - **Jarvis should:** Remind me of the $35k target and January 2027 deadline. Flag if spending is unusually high. Prompt a monthly financial review. Ask about the Pokemon reselling plan until it exists.
@@ -157,7 +156,7 @@
 
 - **Morning routine:** Protected — no meetings or commitments before 9am
 - **Deep work blocks:** 9:30–12:30 and 3:30–5:30
-- **Fixed evening commitments:** Mon/Wed/Fri tutoring, Tue automation work. Wed 12–2pm uni class. Thu full day on campus (study).
+- **Fixed evening commitments:** Mon/Wed tutoring, Tue automation work. Wed 12–2pm uni class. Thu full day on campus (study).
 - **Things Jarvis must never skip:** Internship progress check, workout accountability, savings goal ($35k / Jan 2027), Pokemon reselling plan check-in (until plan exists)
 - **Communication style:** Direct, no fluff. Push me when I'm being lazy. Celebrate wins but don't be sycophantic.
 - **Things that drain me:** Slow unproductive mornings, lack of sleep
@@ -184,7 +183,7 @@ Every morning, Jarvis should cover these in order:
 
 - **Name:** Manav Jain. Based in Sydney. Time zone AEST (UTC+10/+11).
 - UNSW student, Year 2, full-time. Currently T2.
-- Tutoring: Mon 5–7pm, Wed 4–8pm, Fri 6–8pm. Automation work: Tue only, 9:30–5:30. Uni in-person: Wed 12–2pm class, Thu full day on campus.
+- Tutoring: Mon 5–7pm, Wed 4–6pm and 6:05–8:05pm. Automation work: Tue only, 9:30–5:30. Uni in-person: Wed 12–2pm class, Thu full day on campus.
 - Morning protected before 9am. Deep work blocks: 9:30–12:30 and 3:30–5:30.
 - Uni deadlines are bursty — must anticipate the crunch before it arrives each term.
 - Top career priority: land a tech internship (Google, Amazon, Canva, Anthropic, Optiver) in 6–12 months.

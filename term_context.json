@@ -118,7 +118,7 @@
           "name": "Class Test 2",
           "due": "2026-07-31",
           "weight": 5,
-          "status": "pending",
+          "status": "submitted",
           "covers_weeks": [
             7,
             8
