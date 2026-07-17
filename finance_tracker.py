@@ -37,6 +37,12 @@ from pathlib import Path
 import pytz
 import config
 
+try:
+    from live_spend import get_live_summary
+    LIVE_SPEND_AVAILABLE = True
+except Exception:
+    LIVE_SPEND_AVAILABLE = False
+
 # ── Paths ─────────────────────────────────────────────────────────────────────
 
 SCRIPT_DIR   = Path(__file__).parent
@@ -442,6 +448,24 @@ def get_finance_summary():
             lines.append(f"    • {t['date'].strftime('%d %b')}  ${t['debit']:.2f}  {t['description'][:40]}")
 
     lines.append("")
+
+    # ── Live-logged spend (iPhone Back Tap) ───────────────────────────────────
+    if LIVE_SPEND_AVAILABLE:
+        try:
+            live = get_live_summary(days=7, transactions=everyday_txns)
+        except Exception:
+            live = {"available": False}
+        if live["available"]:
+            lines.append("LIVE-LOGGED (Back Tap, last 7 days):")
+            lines.append(f"  {'Total':<18} ${live['total']:.2f}  ({live['count']} entries)")
+            for cat, amt in sorted(live["by_category"].items(), key=lambda x: -x[1]):
+                lines.append(f"  {cat:<18} ${amt:.2f}")
+            if live["matched"] is not None:
+                lines.append(f"  Reconciled: {live['matched']}/{live['count']} matched in bank CSV")
+                for e in live["unmatched"][:3]:
+                    note = f" — {e['note']}" if e["note"] else ""
+                    lines.append(f"    ⚠ not in CSV yet: ${e['amount']:.2f} {e['category']}{note}")
+            lines.append("")
 
     # ── Income tracking ───────────────────────────────────────────────────────
     income = analyse_income(everyday_txns, days=30)

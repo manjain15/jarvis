@@ -1,0 +1,17 @@
+[Unit]
+Description=Jarvis live spend logger (Back Tap endpoint)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=jarvis
+Group=jarvis
+WorkingDirectory=/home/jarvis/jarvis
+ExecStart=/home/jarvis/jarvis/venv/bin/python /home/jarvis/jarvis/live_spend.py --serve
+Restart=on-failure
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
