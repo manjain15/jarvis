@@ -35,4 +35,9 @@ fi
 echo "→ Restarting jarvis-telegram.service"
 sudo systemctl restart jarvis-telegram.service
 
+if systemctl is-enabled --quiet jarvis-spend.service 2>/dev/null; then
+    echo "→ Restarting jarvis-spend.service"
+    sudo systemctl restart jarvis-spend.service
+fi
+
 echo "✓ Deploy complete"
