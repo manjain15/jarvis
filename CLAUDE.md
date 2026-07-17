@@ -108,6 +108,10 @@ Never write outside `/Users/manavjain/jarvis/`.
 
 ---
 
+## Git
+
+- Never include Co-Authored-By lines (or any AI attribution) in commit messages.
+
 ## What NOT to do
 
 - Do not refactor working code unless asked
