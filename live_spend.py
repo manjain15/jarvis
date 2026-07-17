@@ -205,11 +205,11 @@ def create_app():
             entry = log_spend(body.get("amount"), body.get("category"), body.get("note", ""))
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
-        week = get_live_summary(days=7)
+        week_total = get_live_summary(days=7).get("total", entry["amount"])
         return jsonify({
             "ok": True,
             "logged": f"${entry['amount']:.2f} {entry['category']}",
-            "week_total": week["total"] if week["available"] else entry["amount"],
+            "week_total": f"${week_total:.2f}",
         })
 
     @app.get("/health")
