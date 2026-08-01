@@ -216,9 +216,11 @@ def get_google_credentials():
             flow = InstalledAppFlow.from_client_secrets_file(CREDS_FILE, SCOPES)
             creds = flow.run_local_server(port=0)
 
-        # Save the token so we don't need to log in again
-        with open(TOKEN_FILE, "w") as f:
-            f.write(creds.to_json())
+        # Save the token so we don't need to log in again (atomic write —
+        # other cron jobs read this same file concurrently)
+        tmp_file = TOKEN_FILE.parent / (TOKEN_FILE.name + ".tmp")
+        tmp_file.write_text(creds.to_json())
+        tmp_file.replace(TOKEN_FILE)
         print("✅  Google authentication saved.")
 
     return creds

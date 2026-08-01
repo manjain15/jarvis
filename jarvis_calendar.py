@@ -50,7 +50,9 @@ def get_credentials():
     creds = Credentials.from_authorized_user_file(str(token_file), SCOPES)
     if creds.expired and creds.refresh_token:
         creds.refresh(Request())
-        open(token_file, "w").write(creds.to_json())
+        tmp_file = token_file.parent / (token_file.name + ".tmp")
+        tmp_file.write_text(creds.to_json())
+        tmp_file.replace(token_file)
     return creds
 
 

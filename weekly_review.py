@@ -68,8 +68,9 @@ def get_google_credentials():
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
-            with open(TOKEN_FILE, "w") as f:
-                f.write(creds.to_json())
+            tmp_file = TOKEN_FILE.parent / (TOKEN_FILE.name + ".tmp")
+            tmp_file.write_text(creds.to_json())
+            tmp_file.replace(TOKEN_FILE)
     return creds
 
 
@@ -498,7 +499,9 @@ def send_weekly_review(review_html, week_label):
     creds = _Creds.from_authorized_user_file(str(_token_file), SCOPES)
     if creds.expired and creds.refresh_token:
         creds.refresh(_Req())
-        open(_token_file, "w").write(creds.to_json())
+        _tmp_file = _token_file.parent / (_token_file.name + ".tmp")
+        _tmp_file.write_text(creds.to_json())
+        _tmp_file.replace(_token_file)
     service = build("gmail", "v1", credentials=creds)
 
     import ssl, certifi

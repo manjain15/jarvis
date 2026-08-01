@@ -89,8 +89,10 @@ def _connect_sheet() -> gspread.Worksheet:
 
     if creds.expired and creds.refresh_token:
         creds.refresh(Request())
-        with open(token_file, "w") as f:
+        tmp_file = token_file + ".tmp"
+        with open(tmp_file, "w") as f:
             f.write(creds.to_json())
+        os.replace(tmp_file, token_file)
 
     gc = gspread.authorize(creds)
     sh = gc.open(SPREADSHEET_NAME)
