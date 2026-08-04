@@ -24,6 +24,7 @@ from pathlib import Path
 import pytz
 import anthropic
 import config
+from json_store import file_lock, atomic_write_json
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 SCRIPT_DIR       = Path(__file__).parent
@@ -33,6 +34,11 @@ PROFILE_FILE     = SCRIPT_DIR / "profile.md"
 
 MEMORY_DIR.mkdir(exist_ok=True)
 TIMEZONE = pytz.timezone(config.TIMEZONE)
+
+
+def proposals_lock():
+    """Context manager guarding the full load -> mutate -> save cycle for PROPOSALS_FILE."""
+    return file_lock(PROPOSALS_FILE)
 
 
 # ── Transient-proposal guard ──────────────────────────────────────────────────
@@ -80,7 +86,7 @@ def load_proposals():
 
 def save_proposals(proposals):
     """Saves proposals to file."""
-    PROPOSALS_FILE.write_text(json.dumps(proposals, indent=2, default=str))
+    atomic_write_json(PROPOSALS_FILE, proposals)
 
 
 def _normalise(text):
@@ -97,30 +103,31 @@ def add_proposal(section, current_value, proposed_value, reason):
     if is_transient_proposal(proposed_value, reason):
         return False
 
-    proposals = load_proposals()
+    with proposals_lock():
+        proposals = load_proposals()
 
-    # Near-duplicate check: same section + same opening text. Balance figures
-    # and dates mutate slightly each night, so exact match isn't enough.
-    new_key = _normalise(proposed_value)[:100]
-    for p in proposals:
-        if p["section"] == section and _normalise(p["proposed_value"])[:100] == new_key:
-            return False
+        # Near-duplicate check: same section + same opening text. Balance figures
+        # and dates mutate slightly each night, so exact match isn't enough.
+        new_key = _normalise(proposed_value)[:100]
+        for p in proposals:
+            if p["section"] == section and _normalise(p["proposed_value"])[:100] == new_key:
+                return False
 
-    tz  = pytz.timezone(config.TIMEZONE)
-    now = datetime.datetime.now(tz)
+        tz  = pytz.timezone(config.TIMEZONE)
+        now = datetime.datetime.now(tz)
 
-    proposals.append({
-        "id":             len(proposals) + 1,
-        "date":           now.strftime("%Y-%m-%d"),
-        "section":        section,
-        "current_value":  current_value,
-        "proposed_value": proposed_value,
-        "reason":         reason,
-        "status":         "pending",
-    })
+        proposals.append({
+            "id":             len(proposals) + 1,
+            "date":           now.strftime("%Y-%m-%d"),
+            "section":        section,
+            "current_value":  current_value,
+            "proposed_value": proposed_value,
+            "reason":         reason,
+            "status":         "pending",
+        })
 
-    save_proposals(proposals)
-    return True
+        save_proposals(proposals)
+        return True
 
 
 def get_pending_proposals():
@@ -463,25 +470,26 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.prune:
-        proposals = load_proposals()
-        resolved  = datetime.datetime.now(TIMEZONE).strftime("%Y-%m-%d")
-        seen_keys = set()
-        pruned    = 0
-        for p in proposals:
-            if p["status"] != "pending":
-                continue
-            key = (p["section"], _normalise(p["proposed_value"])[:100])
-            if is_transient_proposal(p["proposed_value"], p.get("reason", "")):
-                p["status"], p["resolved_date"] = "rejected", resolved
-                print(f"  🧹  [{p['id']}] transient — {p['proposed_value'][:70]}")
-                pruned += 1
-            elif key in seen_keys:
-                p["status"], p["resolved_date"] = "rejected", resolved
-                print(f"  🧹  [{p['id']}] duplicate — {p['proposed_value'][:70]}")
-                pruned += 1
-            else:
-                seen_keys.add(key)
-        save_proposals(proposals)
+        with proposals_lock():
+            proposals = load_proposals()
+            resolved  = datetime.datetime.now(TIMEZONE).strftime("%Y-%m-%d")
+            seen_keys = set()
+            pruned    = 0
+            for p in proposals:
+                if p["status"] != "pending":
+                    continue
+                key = (p["section"], _normalise(p["proposed_value"])[:100])
+                if is_transient_proposal(p["proposed_value"], p.get("reason", "")):
+                    p["status"], p["resolved_date"] = "rejected", resolved
+                    print(f"  🧹  [{p['id']}] transient — {p['proposed_value'][:70]}")
+                    pruned += 1
+                elif key in seen_keys:
+                    p["status"], p["resolved_date"] = "rejected", resolved
+                    print(f"  🧹  [{p['id']}] duplicate — {p['proposed_value'][:70]}")
+                    pruned += 1
+                else:
+                    seen_keys.add(key)
+            save_proposals(proposals)
         remaining = len(get_pending_proposals())
         print(f"\n✅  Pruned {pruned} proposal(s); {remaining} still pending.\n")
 
@@ -503,16 +511,17 @@ if __name__ == "__main__":
             for p in pending:
                 print(f"  ✔  [{p['id']}] {p['section']}: {p['proposed_value'][:80]}")
             print()
-            if apply_all_updates(pending):
-                proposals = load_proposals()
-                resolved = datetime.datetime.now(pytz.timezone(config.TIMEZONE)).strftime("%Y-%m-%d")
-                for proposal in proposals:
-                    if proposal["status"] == "pending":
-                        proposal["status"] = "approved"
-                        proposal["resolved_date"] = resolved
-                save_proposals(proposals)
-                print(f"\n✅  All {len(pending)} update(s) applied to profile.md\n")
-            else:
-                print("\n❌  Batch apply failed — profile unchanged\n")
+            with proposals_lock():
+                if apply_all_updates(pending):
+                    proposals = load_proposals()
+                    resolved = datetime.datetime.now(pytz.timezone(config.TIMEZONE)).strftime("%Y-%m-%d")
+                    for proposal in proposals:
+                        if proposal["status"] == "pending":
+                            proposal["status"] = "approved"
+                            proposal["resolved_date"] = resolved
+                    save_proposals(proposals)
+                    print(f"\n✅  All {len(pending)} update(s) applied to profile.md\n")
+                else:
+                    print("\n❌  Batch apply failed — profile unchanged\n")
     else:
         review_proposals()

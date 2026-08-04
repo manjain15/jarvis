@@ -29,6 +29,8 @@ import json
 import datetime
 from pathlib import Path
 
+from json_store import file_lock, atomic_write_json
+
 SCRIPT_DIR   = Path(__file__).parent
 CONTEXT_FILE = SCRIPT_DIR / "term_context.json"
 
@@ -40,6 +42,20 @@ def load_context() -> dict:
         return json.loads(CONTEXT_FILE.read_text())
     except Exception:
         return {}
+
+
+def mutate_context(mutate_fn):
+    """
+    Race-safe read-modify-write for term_context.json: holds a lock across
+    the full load -> mutate -> save cycle so a concurrent cron job or
+    Telegram command can't clobber this write. `mutate_fn(ctx)` mutates
+    the loaded dict in place.
+    """
+    with file_lock(CONTEXT_FILE):
+        ctx = load_context()
+        mutate_fn(ctx)
+        atomic_write_json(CONTEXT_FILE, ctx)
+        return ctx
 
 
 # ── Week calculator ───────────────────────────────────────────────────────────
@@ -201,16 +217,16 @@ def update_internship(company: str, **kwargs):
     Update an internship entry by company name.
     Usage: update_internship("Canva", status="interview", next_action="Prep system design")
     """
-    ctx = load_context()
     today = datetime.date.today().isoformat()
 
-    for app in ctx.get("internships", []):
-        if app["company"].lower() == company.lower():
-            app.update(kwargs)
-            app["last_update"] = today
-            break
+    def _mutate(ctx):
+        for app in ctx.get("internships", []):
+            if app["company"].lower() == company.lower():
+                app.update(kwargs)
+                app["last_update"] = today
+                break
 
-    CONTEXT_FILE.write_text(json.dumps(ctx, indent=2))
+    mutate_context(_mutate)
     print(f"✅ Updated {company}")
 
 
@@ -219,12 +235,14 @@ def update_mentor(last_topic: str, awaiting: bool = True):
     Log a mentor touchpoint.
     Usage: update_mentor("Discussed startup ideas", awaiting=True)
     """
-    ctx = load_context()
     today = datetime.date.today().isoformat()
-    ctx["mentor"]["last_contact"]       = today
-    ctx["mentor"]["last_topic"]         = last_topic
-    ctx["mentor"]["awaiting_response"]  = awaiting
-    CONTEXT_FILE.write_text(json.dumps(ctx, indent=2))
+
+    def _mutate(ctx):
+        ctx["mentor"]["last_contact"]      = today
+        ctx["mentor"]["last_topic"]        = last_topic
+        ctx["mentor"]["awaiting_response"] = awaiting
+
+    mutate_context(_mutate)
     print(f"✅ Mentor updated — {last_topic}")
 
 
@@ -233,16 +251,22 @@ def mark_assessment_done(subject_code: str, assessment_name: str):
     Mark an assessment as submitted.
     Usage: mark_assessment_done("COMP2511", "Assignment 1")
     """
-    ctx = load_context()
-    for subject in ctx.get("subjects", []):
-        if subject["code"].upper() == subject_code.upper():
-            for a in subject["assessments"]:
-                if assessment_name.lower() in a["name"].lower():
-                    a["status"] = "submitted"
-                    CONTEXT_FILE.write_text(json.dumps(ctx, indent=2))
-                    print(f"✅ Marked {subject_code} — {a['name']} as submitted")
-                    return
-    print("❌ Assessment not found")
+    matched = {}
+
+    def _mutate(ctx):
+        for subject in ctx.get("subjects", []):
+            if subject["code"].upper() == subject_code.upper():
+                for a in subject["assessments"]:
+                    if assessment_name.lower() in a["name"].lower():
+                        a["status"] = "submitted"
+                        matched["name"] = a["name"]
+                        return
+
+    mutate_context(_mutate)
+    if matched:
+        print(f"✅ Marked {subject_code} — {matched['name']} as submitted")
+    else:
+        print("❌ Assessment not found")
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────

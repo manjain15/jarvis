@@ -355,38 +355,30 @@ def cmd_proposals(_args):
     return "\n\n".join(out) if out else "✅ No pending proposals."
 
 
-def _resolve_proposal(module_name, pid, new_status):
-    """Sets a single pending proposal's status by id. Returns the matched proposal dict, or None."""
-    mod = __import__(module_name, fromlist=["load_proposals", "save_proposals"])
-    proposals = mod.load_proposals()
-    match = next((p for p in proposals if str(p["id"]) == str(pid) and p["status"] == "pending"), None)
-    if not match:
-        return None
-    resolved = datetime.datetime.now(TIMEZONE).strftime("%Y-%m-%d")
-    for p in proposals:
-        if str(p["id"]) == str(pid):
-            p["status"], p["resolved_date"] = new_status, resolved
-    mod.save_proposals(proposals)
-    return match
-
-
 def cmd_approve(args):
     """/approve <profile|term> <id> — applies one pending proposal from Telegram."""
     if len(args) < 2 or args[0].lower() not in ("profile", "term"):
         return "Usage: /approve <profile|term> <id>"
     kind, pid = args[0].lower(), args[1]
     module_name = "update_profile" if kind == "profile" else "term_updates"
-    mod = __import__(module_name, fromlist=["load_proposals"])
-    proposals = mod.load_proposals()
-    match = next((p for p in proposals if str(p["id"]) == str(pid) and p["status"] == "pending"), None)
-    if not match:
-        return f"⚠️ No pending {kind} proposal with id {pid}."
-    try:
-        if not mod.apply_update(match):
-            return f"❌ Failed to apply {kind} proposal [{pid}] — left pending."
-    except Exception as e:
-        return f"⚠️ {e}"
-    _resolve_proposal(module_name, pid, "approved")
+    mod = __import__(module_name, fromlist=["load_proposals", "save_proposals", "apply_update", "proposals_lock"])
+    resolved = datetime.datetime.now(TIMEZONE).strftime("%Y-%m-%d")
+    # Lock spans load -> apply -> save so a concurrent cron proposal-generation
+    # run or another Telegram command can't read a stale queue mid-approval.
+    with mod.proposals_lock():
+        proposals = mod.load_proposals()
+        match = next((p for p in proposals if str(p["id"]) == str(pid) and p["status"] == "pending"), None)
+        if not match:
+            return f"⚠️ No pending {kind} proposal with id {pid}."
+        try:
+            if not mod.apply_update(match):
+                return f"❌ Failed to apply {kind} proposal [{pid}] — left pending."
+        except Exception as e:
+            return f"⚠️ {e}"
+        for p in proposals:
+            if str(p["id"]) == str(pid):
+                p["status"], p["resolved_date"] = "approved", resolved
+        mod.save_proposals(proposals)
     return f"✅ Applied {kind} proposal [{pid}]."
 
 
@@ -396,12 +388,17 @@ def cmd_reject(args):
         return "Usage: /reject <profile|term> <id>"
     kind, pid = args[0].lower(), args[1]
     module_name = "update_profile" if kind == "profile" else "term_updates"
-    try:
-        match = _resolve_proposal(module_name, pid, "rejected")
-    except Exception as e:
-        return f"⚠️ {e}"
-    if not match:
-        return f"⚠️ No pending {kind} proposal with id {pid}."
+    mod = __import__(module_name, fromlist=["load_proposals", "save_proposals", "proposals_lock"])
+    resolved = datetime.datetime.now(TIMEZONE).strftime("%Y-%m-%d")
+    with mod.proposals_lock():
+        proposals = mod.load_proposals()
+        match = next((p for p in proposals if str(p["id"]) == str(pid) and p["status"] == "pending"), None)
+        if not match:
+            return f"⚠️ No pending {kind} proposal with id {pid}."
+        for p in proposals:
+            if str(p["id"]) == str(pid):
+                p["status"], p["resolved_date"] = "rejected", resolved
+        mod.save_proposals(proposals)
     return f"⏭ Rejected {kind} proposal [{pid}]."
 
 
@@ -415,39 +412,47 @@ def cmd_approveall(args):
 
     if kind in ("profile", "both"):
         try:
-            from update_profile import get_pending_proposals, load_proposals, save_proposals, apply_all_updates
-            pending = get_pending_proposals()
-            if not pending:
-                results.append("profile: nothing pending")
-            elif apply_all_updates(pending):
-                proposals = load_proposals()
-                for p in proposals:
-                    if p["status"] == "pending":
-                        p["status"], p["resolved_date"] = "approved", resolved
-                save_proposals(proposals)
-                results.append(f"profile: applied {len(pending)}")
-            else:
-                results.append("profile: batch apply failed — left pending")
+            from update_profile import (
+                get_pending_proposals, load_proposals, save_proposals,
+                apply_all_updates, proposals_lock,
+            )
+            with proposals_lock():
+                pending = get_pending_proposals()
+                if not pending:
+                    results.append("profile: nothing pending")
+                elif apply_all_updates(pending):
+                    proposals = load_proposals()
+                    for p in proposals:
+                        if p["status"] == "pending":
+                            p["status"], p["resolved_date"] = "approved", resolved
+                    save_proposals(proposals)
+                    results.append(f"profile: applied {len(pending)}")
+                else:
+                    results.append("profile: batch apply failed — left pending")
         except Exception as e:
             results.append(f"profile: ⚠️ {e}")
 
     if kind in ("term", "both"):
         try:
-            from term_updates import get_pending_proposals, load_proposals, save_proposals, apply_update
-            pending = get_pending_proposals()
-            if not pending:
-                results.append("term: nothing pending")
-            else:
-                proposals = load_proposals()
-                applied = 0
-                for p in pending:
-                    if apply_update(p):
-                        for proposal in proposals:
-                            if proposal["id"] == p["id"]:
-                                proposal["status"], proposal["resolved_date"] = "approved", resolved
-                        applied += 1
-                save_proposals(proposals)
-                results.append(f"term: applied {applied}/{len(pending)}")
+            from term_updates import (
+                get_pending_proposals, load_proposals, save_proposals,
+                apply_update, proposals_lock,
+            )
+            with proposals_lock():
+                pending = get_pending_proposals()
+                if not pending:
+                    results.append("term: nothing pending")
+                else:
+                    proposals = load_proposals()
+                    applied = 0
+                    for p in pending:
+                        if apply_update(p):
+                            for proposal in proposals:
+                                if proposal["id"] == p["id"]:
+                                    proposal["status"], proposal["resolved_date"] = "approved", resolved
+                            applied += 1
+                    save_proposals(proposals)
+                    results.append(f"term: applied {applied}/{len(pending)}")
         except Exception as e:
             results.append(f"term: ⚠️ {e}")
 

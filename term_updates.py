@@ -28,11 +28,17 @@ import anthropic
 import config
 
 import term_context
+from json_store import file_lock, atomic_write_json
 
 SCRIPT_DIR     = Path(__file__).parent
 MEMORY_DIR     = SCRIPT_DIR / "memory"
 PROPOSALS_FILE = MEMORY_DIR / "term_proposed_updates.json"
 CONTEXT_FILE   = SCRIPT_DIR / "term_context.json"
+
+
+def proposals_lock():
+    """Context manager guarding the full load -> mutate -> save cycle for PROPOSALS_FILE."""
+    return file_lock(PROPOSALS_FILE)
 
 MEMORY_DIR.mkdir(exist_ok=True)
 TIMEZONE = pytz.timezone(config.TIMEZONE)
@@ -60,7 +66,7 @@ def load_proposals():
 
 
 def save_proposals(proposals):
-    PROPOSALS_FILE.write_text(json.dumps(proposals, indent=2, default=str))
+    atomic_write_json(PROPOSALS_FILE, proposals)
 
 
 def _dedup_key(action, params):
@@ -75,27 +81,28 @@ def add_proposal(action, params, summary, reason):
     if not all(k in params for k in required):
         return False
 
-    proposals = load_proposals()
-    key = _dedup_key(action, params)
-    # Check every status, not just pending: a rejected proposal must not be
-    # re-queued nightly from the same evidence, and an approved one is already
-    # applied so re-proposing it is redundant.
-    for p in proposals:
-        if _dedup_key(p["action"], p["params"]) == key:
-            return False
+    with proposals_lock():
+        proposals = load_proposals()
+        key = _dedup_key(action, params)
+        # Check every status, not just pending: a rejected proposal must not be
+        # re-queued nightly from the same evidence, and an approved one is already
+        # applied so re-proposing it is redundant.
+        for p in proposals:
+            if _dedup_key(p["action"], p["params"]) == key:
+                return False
 
-    now = datetime.datetime.now(TIMEZONE)
-    proposals.append({
-        "id":      len(proposals) + 1,
-        "date":    now.strftime("%Y-%m-%d"),
-        "action":  action,
-        "params":  params,
-        "summary": summary,
-        "reason":  reason,
-        "status":  "pending",
-    })
-    save_proposals(proposals)
-    return True
+        now = datetime.datetime.now(TIMEZONE)
+        proposals.append({
+            "id":      len(proposals) + 1,
+            "date":    now.strftime("%Y-%m-%d"),
+            "action":  action,
+            "params":  params,
+            "summary": summary,
+            "reason":  reason,
+            "status":  "pending",
+        })
+        save_proposals(proposals)
+        return True
 
 
 def get_pending_proposals():
@@ -229,17 +236,23 @@ def apply_update(proposal):
             return True
 
         if action == "assessment_due_set":
-            ctx = term_context.load_context()
-            for subject in ctx.get("subjects", []):
-                if subject["code"].upper() != params["subject_code"].upper():
-                    continue
-                for a in subject.get("assessments", []):
-                    if params["assessment_name"].lower() in a["name"].lower():
-                        a["due"] = params["due"]
-                        if params.get("weight") is not None:
-                            a["weight"] = params["weight"]
-                        CONTEXT_FILE.write_text(json.dumps(ctx, indent=2))
-                        return True
+            matched = {}
+
+            def _mutate(ctx):
+                for subject in ctx.get("subjects", []):
+                    if subject["code"].upper() != params["subject_code"].upper():
+                        continue
+                    for a in subject.get("assessments", []):
+                        if params["assessment_name"].lower() in a["name"].lower():
+                            a["due"] = params["due"]
+                            if params.get("weight") is not None:
+                                a["weight"] = params["weight"]
+                            matched["name"] = a["name"]
+                            return
+
+            term_context.mutate_context(_mutate)
+            if matched:
+                return True
             print(f"  ❌  Assessment not found: {params['subject_code']} / {params['assessment_name']}")
             return False
 
@@ -317,20 +330,21 @@ if __name__ == "__main__":
             print("\n✅  No pending term proposals.\n")
         else:
             print(f"\n⚡  Applying all {len(pending)} term proposal(s)...\n")
-            proposals = load_proposals()
             today_iso = datetime.datetime.now(TIMEZONE).strftime("%Y-%m-%d")
             applied = 0
-            for p in pending:
-                if apply_update(p):
-                    for proposal in proposals:
-                        if proposal["id"] == p["id"]:
-                            proposal["status"] = "approved"
-                            proposal["resolved_date"] = today_iso
-                    applied += 1
-                    print(f"  ✔  [{p['id']}] {p['summary']}")
-                else:
-                    print(f"  ❌  [{p['id']}] {p['summary']} — failed, left pending")
-            save_proposals(proposals)
+            with proposals_lock():
+                proposals = load_proposals()
+                for p in pending:
+                    if apply_update(p):
+                        for proposal in proposals:
+                            if proposal["id"] == p["id"]:
+                                proposal["status"] = "approved"
+                                proposal["resolved_date"] = today_iso
+                        applied += 1
+                        print(f"  ✔  [{p['id']}] {p['summary']}")
+                    else:
+                        print(f"  ❌  [{p['id']}] {p['summary']} — failed, left pending")
+                save_proposals(proposals)
             print(f"\n✅  {applied}/{len(pending)} applied to term_context.json\n")
 
     elif args.list:
