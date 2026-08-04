@@ -236,12 +236,124 @@ Use them. Be specific to his life, not generic.
 Replies should fit on a phone screen — usually 1-4 short sentences.
 Only go longer when the topic genuinely needs it.
 
-When he tells you something worth remembering (an interview invite, a
-mentor reply, a submitted assignment, a new application), suggest the
-matching slash command in one short line — e.g.:
-   "Worth logging: /internship Canva status=interview next=\\"Prep system design\\""
-Don't apply the change yourself. He approves these manually.
+When he tells you something worth recording — an interview invite, a
+mentor reply, a submitted assignment, a new application, a durable fact
+about him — call the matching tool (propose_profile_update or
+propose_term_update) to queue it. Calling the tool does NOT apply the
+change; he still approves or rejects it himself with /approve. Don't
+call a tool for transient day-to-day chat (moods, today's plans,
+balances, one-off scheduling) — only for things that belong in his
+persistent profile or term tracker.
 """
+
+
+PROPOSAL_TOOLS = [
+    {
+        "name": "propose_profile_update",
+        "description": (
+            "Queue a proposed edit to profile.md — Manav's persistent profile of "
+            "stable facts about him (skills, goals, preferences, biographical info). "
+            "Use only for durable facts, not transient day-to-day data. This does NOT "
+            "apply the change; it queues a pending proposal Manav must approve."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "section": {
+                    "type": "string",
+                    "description": "The profile.md section heading this belongs under, e.g. 'Skills', 'Goals', 'Preferences'.",
+                },
+                "current_value": {
+                    "type": "string",
+                    "description": "The current text in profile.md being replaced (best guess from context if unsure).",
+                },
+                "proposed_value": {
+                    "type": "string",
+                    "description": "The new fact/value to record.",
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "Why this update is warranted, citing what Manav said.",
+                },
+            },
+            "required": ["section", "current_value", "proposed_value", "reason"],
+        },
+    },
+    {
+        "name": "propose_term_update",
+        "description": (
+            "Queue a proposed update to term_context.json — Manav's live tracker for "
+            "internship pipeline, mentor touchpoints, and assessment deadlines/submissions "
+            "this term. This does NOT apply the change; it queues a pending proposal "
+            "Manav must approve."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": [
+                        "internship_status_change", "internship_next_action",
+                        "mentor_update", "assessment_due_set", "assessment_submitted",
+                    ],
+                    "description": "Which kind of term_context.json update this is.",
+                },
+                "params": {
+                    "type": "object",
+                    "description": (
+                        "Params required per action: internship_status_change -> "
+                        "{company, status, next_action?}; internship_next_action -> "
+                        "{company, next_action}; mentor_update -> {last_topic, "
+                        "awaiting_response}; assessment_due_set -> {subject_code, "
+                        "assessment_name, due, weight?}; assessment_submitted -> "
+                        "{subject_code, assessment_name}."
+                    ),
+                },
+                "summary": {
+                    "type": "string",
+                    "description": "One-line human-readable summary of the change.",
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "Why this update is warranted, citing what Manav said.",
+                },
+            },
+            "required": ["action", "params", "summary", "reason"],
+        },
+    },
+]
+
+
+def _handle_tool_call(block):
+    """Executes one Claude tool_use block against a proposal queue. Returns a confirmation line."""
+    try:
+        if block.name == "propose_profile_update":
+            from update_profile import add_proposal, get_pending_proposals
+            ok = add_proposal(
+                block.input["section"], block.input["current_value"],
+                block.input["proposed_value"], block.input["reason"],
+            )
+            if not ok:
+                return "⏭ Skipped a profile update (transient or duplicate)."
+            pending = get_pending_proposals()
+            pid = max((p["id"] for p in pending), default="?")
+            return f"📝 Queued profile proposal [{pid}] — /approve profile {pid}"
+
+        if block.name == "propose_term_update":
+            from term_updates import add_proposal, get_pending_proposals
+            ok = add_proposal(
+                block.input["action"], block.input.get("params", {}),
+                block.input.get("summary", ""), block.input["reason"],
+            )
+            if not ok:
+                return "⏭ Skipped a term update (invalid action or duplicate)."
+            pending = get_pending_proposals()
+            pid = max((p["id"] for p in pending), default="?")
+            return f"📝 Queued term proposal [{pid}] — /approve term {pid}"
+
+        return f"⚠️ Unknown tool: {block.name}"
+    except Exception as e:
+        return f"⚠️ Tool call failed: {e}"
 
 
 def chat_with_claude(user_message, static_context, recent_turns):
@@ -265,8 +377,18 @@ def chat_with_claude(user_message, static_context, recent_turns):
             },
         ],
         messages=messages,
+        tools=PROPOSAL_TOOLS,
     )
-    return response.content[0].text.strip()
+
+    # Tool calls are resolved deterministically in code, not via a second
+    # Claude round trip — keeps cost flat at one call per message.
+    text_parts  = [b.text.strip() for b in response.content if b.type == "text" and b.text.strip()]
+    tool_replies = [_handle_tool_call(b) for b in response.content if b.type == "tool_use"]
+
+    reply = "\n".join(text_parts).strip()
+    if tool_replies:
+        reply = (reply + "\n\n" if reply else "") + "\n".join(tool_replies)
+    return reply or "✅ Done."
 
 
 # ── Slash command router ────────────────────────────────────────────────────
