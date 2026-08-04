@@ -69,7 +69,7 @@
           "name": "Class Test 2",
           "due": "2026-07-31",
           "weight": 21,
-          "status": "pending",
+          "status": "submitted",
           "covers_weeks": [
             4,
             5,
@@ -105,7 +105,7 @@
           "name": "Midterm Test",
           "due": "2026-07-17",
           "weight": 30,
-          "status": "pending",
+          "status": "submitted",
           "covers_weeks": [
             1,
             2,
@@ -167,9 +167,9 @@
     "name": "Google Mentor",
     "company": "Google",
     "relationship": "industry mentor \u2014 ad-hoc availability based",
-    "last_contact": "2026-06-23",
-    "last_topic": "Mentor following up on Relevance AI and Harrison AI startup contacts \u2014 still searching her network and will follow up when she has connections",
-    "awaiting_response": true,
+    "last_contact": "2026-07-31",
+    "last_topic": "Google mentor arranged a meeting with a Google Cloud health startup contact for Monday next week",
+    "awaiting_response": false,
     "next_action": "Follow up if no reply within 1 week",
     "notes": "No fixed schedule. Reach out when you have something concrete or a decision to make."
   },

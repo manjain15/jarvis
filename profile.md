@@ -1,6 +1,6 @@
 # Jarvis — Personal Profile Document
 > This document is read by Jarvis at the start of every session. Keep it updated. The more accurate it is, the more useful Jarvis becomes.
-> Last updated: July 2026
+> Last updated: August 2026
 
 ---
 
@@ -103,9 +103,9 @@
 
 | Project | Status | Next action | Due |
 |---|---|---|---|
-| Uni — T2 2026 | In progress | COMP2511, MATH2601, MATH2901 | Ends ~Nov 2026 |
-| Internship search | Active | Apply to at least 1 company this week. Canva — OA completed, awaiting interview invite | Ongoing |
-| Google mentor relationship | Active | Follow up / schedule next conversation | [Date] |
+| Uni — T2 2026 | In progress | COMP2511, MATH2601, MATH2901 — MATH2601 Class Test 2 sat 31 Jul | Ends ~Nov 2026 |
+| Internship search | Active | Applied to Lyra (Forward Deployed Engineer Intern) 22 Jul. Canva — OA completed, awaiting interview invite | Ongoing |
+| Google mentor relationship | Active | Attend meeting with Google Cloud health startup contact — Monday 3 Aug 2026 | 3 Aug 2026 |
 | Pokemon reselling plan | Active | Bot set to monitor Kmart for FP3 drop — track next purchase opportunity | Ongoing |
 | Passion project | Ideation | Define concept, write a 1-pager | [Date] |
 | Portfolio / GitHub | Building | Push latest project to GitHub | [Date] |
@@ -146,9 +146,9 @@
 - **Target companies:** Google, Amazon, Canva, Anthropic, Optiver
 - **Target roles:** Software Engineer Intern, AI Engineer Intern, ML Intern
 - **Networking status:** Light — the Google mentor relationship is the main active thread. Need to increase overall.
-- **Applications sent this month:** Vontier (ML Intern, Gen AI Intern)
+- **Applications sent this month:** Vontier (ML Intern, Gen AI Intern), Lyra (take-home assessment submitted)
 - **Applications last month:** Google, TikTok, Canva — Google and TikTok outcomes unknown; Canva OA completed, awaiting interview invite.
-- **Active conversations:** Google employee mentor — ongoing. Last contact: 2 June 2026. Awaiting her response regarding startups Manav mentioned.
+- **Active conversations:** Google employee mentor — ongoing. Last contact: 30 July 2026. Mentor has set up a meeting with a Google Cloud health startup contact for Monday 3 August 2026.
 
 ---
 
@@ -195,6 +195,7 @@ Every morning, Jarvis should cover these in order:
 - Has a passion project to ship — hold me accountable.
 - Responds well to being pushed, not babied.
 - Prefers concise, direct communication — no fluff.
+- Google mentor relationship active — last contact 30 July 2026. Mentor arranged a meeting with a Google Cloud health startup contact for Monday 3 August 2026.
 
 ---
 
