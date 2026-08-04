@@ -263,6 +263,15 @@ def apply_update(proposal):
         return False
 
 
+def _record_trust(proposal, approved):
+    """Records an approve/reject outcome for this proposal's `action` category. Never raises."""
+    try:
+        from proposal_trust import record_outcome
+        record_outcome(f"term:{proposal['action']}", approved)
+    except Exception:
+        pass
+
+
 # ── Interactive review CLI ───────────────────────────────────────────────────
 
 def review_proposals():
@@ -294,6 +303,7 @@ def review_proposals():
                         proposal["status"] = "approved"
                         proposal["resolved_date"] = today_iso
                 save_proposals(proposals)
+                _record_trust(p, approved=True)
                 print("  ✅  term_context.json updated")
             else:
                 print("  ❌  Update failed — file unchanged")
@@ -303,6 +313,7 @@ def review_proposals():
                     proposal["status"] = "rejected"
                     proposal["resolved_date"] = today_iso
             save_proposals(proposals)
+            _record_trust(p, approved=False)
             print("  ⏭   Rejected")
         else:
             print("  ⏭   Skipped (will ask again tomorrow)")
@@ -341,6 +352,7 @@ if __name__ == "__main__":
                                 proposal["status"] = "approved"
                                 proposal["resolved_date"] = today_iso
                         applied += 1
+                        _record_trust(p, approved=True)
                         print(f"  ✔  [{p['id']}] {p['summary']}")
                     else:
                         print(f"  ❌  [{p['id']}] {p['summary']} — failed, left pending")

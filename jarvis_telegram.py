@@ -281,6 +281,7 @@ def cmd_help(_args):
         "/approve <profile|term> <id> — apply one pending proposal\n"
         "/reject <profile|term> <id> — reject one pending proposal\n"
         "/approveall [profile|term] — apply all pending proposals\n"
+        "/trust — approve/reject history per proposal category\n"
         "/done SUB \"Assessment name\" — mark submitted\n"
         "/internship Co key=val ... — update internship\n"
         "/mentor \"topic\" [true|false] — log mentor touchpoint\n"
@@ -355,6 +356,24 @@ def cmd_proposals(_args):
     return "\n\n".join(out) if out else "✅ No pending proposals."
 
 
+def _record_trust(kind, proposal, approved):
+    """Records an approve/reject outcome against the right trust category. Never raises."""
+    try:
+        from proposal_trust import record_outcome
+        category = "profile" if kind == "profile" else f"term:{proposal['action']}"
+        record_outcome(category, approved)
+    except Exception:
+        pass
+
+
+def cmd_trust(_args):
+    try:
+        from proposal_trust import format_trust_summary
+        return format_trust_summary()
+    except Exception as e:
+        return f"⚠️ {e}"
+
+
 def cmd_approve(args):
     """/approve <profile|term> <id> — applies one pending proposal from Telegram."""
     if len(args) < 2 or args[0].lower() not in ("profile", "term"):
@@ -379,6 +398,7 @@ def cmd_approve(args):
             if str(p["id"]) == str(pid):
                 p["status"], p["resolved_date"] = "approved", resolved
         mod.save_proposals(proposals)
+    _record_trust(kind, match, approved=True)
     return f"✅ Applied {kind} proposal [{pid}]."
 
 
@@ -399,6 +419,7 @@ def cmd_reject(args):
             if str(p["id"]) == str(pid):
                 p["status"], p["resolved_date"] = "rejected", resolved
         mod.save_proposals(proposals)
+    _record_trust(kind, match, approved=False)
     return f"⏭ Rejected {kind} proposal [{pid}]."
 
 
@@ -426,6 +447,8 @@ def cmd_approveall(args):
                         if p["status"] == "pending":
                             p["status"], p["resolved_date"] = "approved", resolved
                     save_proposals(proposals)
+                    for p in pending:
+                        _record_trust("profile", p, approved=True)
                     results.append(f"profile: applied {len(pending)}")
                 else:
                     results.append("profile: batch apply failed — left pending")
@@ -451,6 +474,7 @@ def cmd_approveall(args):
                                 if proposal["id"] == p["id"]:
                                     proposal["status"], proposal["resolved_date"] = "approved", resolved
                             applied += 1
+                            _record_trust("term", p, approved=True)
                     save_proposals(proposals)
                     results.append(f"term: applied {applied}/{len(pending)}")
         except Exception as e:
@@ -589,6 +613,7 @@ COMMANDS = {
     "/approve":    cmd_approve,
     "/reject":     cmd_reject,
     "/approveall": cmd_approveall,
+    "/trust":      cmd_trust,
     "/done":       cmd_done,
     "/internship": cmd_internship,
     "/mentor":     cmd_mentor,

@@ -396,6 +396,15 @@ Do not add commentary, do not change anything else."""
         return False
 
 
+def _record_trust(approved):
+    """Records an approve/reject outcome for the "profile" trust category. Never raises."""
+    try:
+        from proposal_trust import record_outcome
+        record_outcome("profile", approved)
+    except Exception:
+        pass
+
+
 # ── Interactive review CLI ────────────────────────────────────────────────────
 
 def review_proposals():
@@ -432,6 +441,7 @@ def review_proposals():
                             pytz.timezone(config.TIMEZONE)
                         ).strftime("%Y-%m-%d")
                 save_proposals(proposals)
+                _record_trust(approved=True)
                 print(f"  ✅  Update applied to profile.md")
             else:
                 print(f"  ❌  Update failed — profile unchanged")
@@ -445,6 +455,7 @@ def review_proposals():
                         pytz.timezone(config.TIMEZONE)
                     ).strftime("%Y-%m-%d")
             save_proposals(proposals)
+            _record_trust(approved=False)
             print(f"  ⏭   Rejected")
 
         else:
@@ -520,6 +531,8 @@ if __name__ == "__main__":
                             proposal["status"] = "approved"
                             proposal["resolved_date"] = resolved
                     save_proposals(proposals)
+                    for p in pending:
+                        _record_trust(approved=True)
                     print(f"\n✅  All {len(pending)} update(s) applied to profile.md\n")
                 else:
                     print("\n❌  Batch apply failed — profile unchanged\n")
