@@ -22,6 +22,10 @@ __pycache__/
 memory/
 profile_backup_*.md
 
+# Live state — VPS is authoritative; local checkout copies go stale
+profile.md
+term_context.json
+
 # Mac
 .DS_Store
 .claude
