@@ -283,9 +283,9 @@ PROPOSAL_TOOLS = [
         "name": "propose_term_update",
         "description": (
             "Queue a proposed update to term_context.json — Manav's live tracker for "
-            "internship pipeline, mentor touchpoints, and assessment deadlines/submissions "
-            "this term. This does NOT apply the change; it queues a pending proposal "
-            "Manav must approve."
+            "internship pipeline, mentor touchpoints, assessment deadlines/submissions, "
+            "and his weekly workout split (PPLRUL). This does NOT apply the change; it "
+            "queues a pending proposal Manav must approve."
         ),
         "input_schema": {
             "type": "object",
@@ -295,6 +295,7 @@ PROPOSAL_TOOLS = [
                     "enum": [
                         "internship_status_change", "internship_next_action",
                         "mentor_update", "assessment_due_set", "assessment_submitted",
+                        "workout_schedule_change",
                     ],
                     "description": "Which kind of term_context.json update this is.",
                 },
@@ -306,7 +307,12 @@ PROPOSAL_TOOLS = [
                         "{company, next_action}; mentor_update -> {last_topic, "
                         "awaiting_response}; assessment_due_set -> {subject_code, "
                         "assessment_name, due, weight?}; assessment_submitted -> "
-                        "{subject_code, assessment_name}."
+                        "{subject_code, assessment_name}; workout_schedule_change -> "
+                        "{schedule: {Sunday, Monday, Tuesday, Wednesday, Thursday, Friday, "
+                        "Saturday}} — ALL 7 weekdays required every time, each mapped to one "
+                        "of Push/Pull/Legs/Rest/Upper/Sharms. When Manav describes a shift "
+                        "(e.g. 'push everything back a day'), work out the full resulting "
+                        "7-day mapping yourself and pass it whole — don't pass a partial change."
                     ),
                 },
                 "summary": {

@@ -42,21 +42,21 @@ def now_sydney():
 
 
 # ── PPLRUL helper ─────────────────────────────────────────────────────────────
-# PPLRUL cycle starts from a known anchor date — update ANCHOR_DATE and
-# ANCHOR_DAY if you need to re-sync the cycle.
-
-PPLRUL = ["Push", "Pull", "Legs", "Rest", "Upper", "Sharms", "Rest"]
-ANCHOR_DATE = datetime.date(2026, 5, 13)
-ANCHOR_DAY  = 2  # Legs on May 13 (Wednesday) — Push starts Monday
+# Schedule itself lives in term_context.json (single source of truth).
+try:
+    from term_context import get_pplrul_day as _get_pplrul_day, VALID_SPLIT_LABELS as _VALID_SPLIT_LABELS
+    PPLRUL = sorted(_VALID_SPLIT_LABELS)
+except Exception:
+    PPLRUL = ["Push", "Pull", "Legs", "Rest", "Upper", "Sharms", "Rest"]
+    def _get_pplrul_day(date=None):
+        return "Rest"
 
 
 def get_pplrul_day(date=None):
     """Returns the PPLRUL label for the given date (default: today)."""
     if date is None:
         date = now_sydney().date()
-    delta = (date - ANCHOR_DATE).days
-    index = (ANCHOR_DAY + delta) % len(PPLRUL)
-    return PPLRUL[index]
+    return _get_pplrul_day(date)
 
 
 def get_tomorrow_pplrul():

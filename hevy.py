@@ -180,17 +180,16 @@ def get_weekly_sessions(workouts):
     return len(session_dates), session_dates
 
 
-# ── PPLRUL helper (mirrors google_health.py) ──────────────────────────────────
-
-PPLRUL      = ["Push", "Pull", "Legs", "Rest", "Upper", "Sharms", "Rest"]
-ANCHOR_DATE = datetime.date(2026, 5, 13)
-ANCHOR_DAY  = 2  # Legs on May 13
-
-def get_pplrul_day(date=None):
-    if date is None:
-        date = datetime.datetime.now(TIMEZONE).date()
-    delta = (date - ANCHOR_DATE).days
-    return PPLRUL[(ANCHOR_DAY + delta) % len(PPLRUL)]
+# ── PPLRUL helper ──────────────────────────────────────────────────────────────
+# Schedule itself now lives in term_context.json (single source of truth,
+# editable via proposals) instead of being hardcoded here.
+try:
+    from term_context import get_pplrul_day, VALID_SPLIT_LABELS as _VALID_SPLIT_LABELS
+    PPLRUL = sorted(_VALID_SPLIT_LABELS)  # kept for backward-compat imports elsewhere
+except Exception:
+    PPLRUL = ["Push", "Pull", "Legs", "Rest", "Upper", "Sharms", "Rest"]
+    def get_pplrul_day(date=None):
+        return "Rest"
 
 
 # ── Main summary ──────────────────────────────────────────────────────────────

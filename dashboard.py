@@ -54,7 +54,7 @@ except Exception:
     HEALTH_DETAIL = False
 
 try:
-    from hevy import fetch_recent_workouts, parse_workout_date, get_pplrul_day, PPLRUL, ANCHOR_DATE, ANCHOR_DAY
+    from hevy import fetch_recent_workouts, parse_workout_date, get_pplrul_day, PPLRUL
     HEVY_DETAIL = True
 except Exception:
     HEVY_DETAIL = False

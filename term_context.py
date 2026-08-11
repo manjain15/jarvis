@@ -29,10 +29,13 @@ import json
 import datetime
 from pathlib import Path
 
+import pytz
+import config
 from json_store import file_lock, atomic_write_json
 
 SCRIPT_DIR   = Path(__file__).parent
 CONTEXT_FILE = SCRIPT_DIR / "term_context.json"
+TIMEZONE     = pytz.timezone(config.TIMEZONE)
 
 
 # ── Loader ────────────────────────────────────────────────────────────────────
@@ -56,6 +59,54 @@ def mutate_context(mutate_fn):
         mutate_fn(ctx)
         atomic_write_json(CONTEXT_FILE, ctx)
         return ctx
+
+
+# ── Workout split ─────────────────────────────────────────────────────────────
+# Single source of truth for the PPLRUL training split, keyed by weekday name.
+# hevy.py, google_health.py, and evening_checkin.py all read this instead of
+# each keeping their own hardcoded copy.
+
+VALID_SPLIT_LABELS = {"Push", "Pull", "Legs", "Rest", "Upper", "Sharms"}
+
+DEFAULT_WORKOUT_SCHEDULE = {
+    "Sunday":    "Push",
+    "Monday":    "Pull",
+    "Tuesday":   "Legs",
+    "Wednesday": "Rest",
+    "Thursday":  "Upper",
+    "Friday":    "Sharms",
+    "Saturday":  "Rest",
+}
+
+
+def get_workout_schedule() -> dict:
+    """Returns the weekday -> split-label mapping, falling back to the default if unset."""
+    ctx = load_context()
+    return ctx.get("workout_schedule") or DEFAULT_WORKOUT_SCHEDULE
+
+
+def get_pplrul_day(date=None) -> str:
+    """Returns the training split label (Push/Pull/Legs/Rest/Upper/Sharms) for a date's weekday."""
+    date = date or datetime.datetime.now(TIMEZONE).date()
+    return get_workout_schedule()[date.strftime("%A")]
+
+
+def update_workout_schedule(schedule: dict):
+    """
+    Overwrites the full 7-day workout schedule. `schedule` must map every
+    weekday name to a known split label.
+    """
+    missing = DEFAULT_WORKOUT_SCHEDULE.keys() - schedule.keys()
+    if missing:
+        raise ValueError(f"workout schedule missing weekday(s): {sorted(missing)}")
+    invalid = set(schedule.values()) - VALID_SPLIT_LABELS
+    if invalid:
+        raise ValueError(f"unknown split label(s): {sorted(invalid)}")
+
+    def _mutate(ctx):
+        ctx["workout_schedule"] = schedule
+
+    mutate_context(_mutate)
 
 
 # ── Week calculator ───────────────────────────────────────────────────────────

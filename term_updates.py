@@ -51,6 +51,7 @@ ALLOWED_ACTIONS = {
     "mentor_update":            ["last_topic", "awaiting_response"],
     "assessment_due_set":       ["subject_code", "assessment_name", "due"],
     "assessment_submitted":     ["subject_code", "assessment_name"],
+    "workout_schedule_change":  ["schedule"],
 }
 
 
@@ -255,6 +256,10 @@ def apply_update(proposal):
                 return True
             print(f"  ❌  Assessment not found: {params['subject_code']} / {params['assessment_name']}")
             return False
+
+        if action == "workout_schedule_change":
+            term_context.update_workout_schedule(params["schedule"])
+            return True
 
         print(f"  ❌  Unknown action: {action}")
         return False
