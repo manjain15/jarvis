@@ -128,10 +128,13 @@ except Exception:
 
 # ── Term context integration (optional) ─────────────────────────────────────
 try:
-    from term_context import get_term_summary, get_flags
+    from term_context import get_term_summary, get_flags, get_finance_goals
     TERM_CONTEXT_AVAILABLE = True
 except Exception:
     TERM_CONTEXT_AVAILABLE = False
+    def get_finance_goals():
+        return {"savings_goal": 35000.00, "savings_deadline": "2027-01-01",
+                "monthly_income": 2800.00, "monthly_budget": 300.00, "weekly_budget": 75.00}
 
 # ── Course schedule — this week's topics from course outlines (optional) ──────
 try:
@@ -492,10 +495,10 @@ def build_prompt(profile_text, events, emails, today_str, checkin_summary=None, 
                 lines.append(f"    • {p}")
 
         exch = term_data.get("exchange_target") or {}
-        if exch:
+        if exch.get("savings_goal"):
             lines.append(
-                f"  US Exchange target: {exch.get('target_date','?')} — "
-                f"savings goal ${exch.get('savings_target','?')}"
+                f"  US Exchange target: {exch['savings_deadline']} — "
+                f"savings goal ${exch['savings_goal']:,.0f}"
             )
 
         term_section = "\n".join(lines) if lines else "  No term context loaded."
@@ -508,6 +511,9 @@ def build_prompt(profile_text, events, emails, today_str, checkin_summary=None, 
         flags_section = "  No urgent term/internship/mentor flags today."
 
     academic_section = academic_alerts if academic_alerts else "  No assessment or revision alerts right now."
+
+    _fin_goals = get_finance_goals()
+    _fin_deadline_str = datetime.date.fromisoformat(_fin_goals["savings_deadline"]).strftime("%B %Y")
 
     prompt = f"""You are Jarvis — a highly intelligent personal assistant who knows this person deeply.
 You speak directly, concisely, and with genuine intelligence. No fluff. No filler.
@@ -636,7 +642,7 @@ up today with a specific draft line. Otherwise, one line on mentor status. Omit 
 [Use FITBIT DATA for sleep/HR/steps AND HEVY DATA for workout tracking AND PROGRESSIVE OVERLOAD data. State actual sleep vs 7-8hr target, resting HR. Confirm if they trained yesterday, any PBs. State today's split. If any lifts are stalling, flag the most important one. 5-6 lines max, direct and specific.]
 
 <h3>💰 Finance flag</h3>
-[Use the FINANCE DATA — be specific with real numbers. Call out: unusual transactions over $50, any category spending that seems high vs a ~$75/week budget (~$300/month total spending), savings progress vs $35k Jan 2027 goal, and the RESELLING P&L (if net is negative, flag the burn rate and ask what's not moving; if positive, note the margin and ask what's working). 3-4 lines max, direct. ALSO: if today is Sunday, remind Manav to export his St. George CSV (everyday + savings + investing), drop them in the jarvis/finance/ folder, and run deploy/sync-finance-up.sh to push them to the VPS — this keeps finance tracking accurate for the week ahead.]
+[Use the FINANCE DATA — be specific with real numbers. Call out: unusual transactions over $50, any category spending that seems high vs a ~${_fin_goals['weekly_budget']:.0f}/week budget (~${_fin_goals['monthly_budget']:.0f}/month total spending), savings progress vs the ${_fin_goals['savings_goal']:,.0f} goal by {_fin_deadline_str}, and the RESELLING P&L (if net is negative, flag the burn rate and ask what's not moving; if positive, note the margin and ask what's working). 3-4 lines max, direct. ALSO: if today is Sunday, remind Manav to export his St. George CSV (everyday + savings + investing), drop them in the jarvis/finance/ folder, and run deploy/sync-finance-up.sh to push them to the VPS — this keeps finance tracking accurate for the week ahead.]
 
 <h3>🔄 Profile & term updates</h3>
 [ONLY include this section if there are pending proposals in the data (profile OR term context). List each proposal concisely — what would change, and why. For profile proposals tell Manav to run 'python update_profile.py'; for term-context proposals tell him to run 'python term_updates.py'. If both types are pending, mention both commands. If no proposals at all, omit this section entirely.]

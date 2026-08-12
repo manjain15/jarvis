@@ -204,20 +204,23 @@ def collect_finance_data(week_start, week_end):
         from finance_tracker import parse_stgeorge_csv, analyse_spending, analyse_savings, EVERYDAY_CSV
 
         if EVERYDAY_CSV.exists():
+            from term_context import get_finance_goals
+            goals    = get_finance_goals()
             txns    = parse_stgeorge_csv(EVERYDAY_CSV)
             spending = analyse_spending(txns, days=7)
             savings  = analyse_savings()
 
-            lines.append(f"  Total spend: ${spending['total_spend']:.2f} (budget: ~$75/week)")
+            lines.append(f"  Total spend: ${spending['total_spend']:.2f} (budget: ~${goals['weekly_budget']:.0f}/week)")
 
             for cat, amt in sorted(spending["category_totals"].items(), key=lambda x: -x[1]):
                 if amt > 0:
                     lines.append(f"  {cat}: ${amt:.2f}")
 
-            lines.append(f"\n  Savings: ${savings['total']:,.2f} of $35,000 ({savings['pct']:.1f}%)")
+            lines.append(f"\n  Savings: ${savings['total']:,.2f} of ${savings['goal']:,.0f} ({savings['pct']:.1f}%)")
+            deadline_str = savings['deadline'].strftime('%B %Y')
             lines.append(
                 f"  Projection: {savings['projected_date'].strftime('%B %Y')} "
-                f"({'on track' if savings['on_track'] else 'behind — Jan 2027 deadline'})"
+                f"({'on track' if savings['on_track'] else f'behind — {deadline_str} deadline'})"
             )
         else:
             lines.append("  No finance CSV — export St. George CSV today.")
@@ -279,10 +282,10 @@ def collect_term_context():
             lines.append(f"    • {p}")
 
     exch = term.get("exchange_target") or {}
-    if exch:
+    if exch.get("savings_goal"):
         lines.append(
-            f"  US Exchange: {exch.get('target_date','?')} — "
-            f"savings goal ${exch.get('savings_target','?')}"
+            f"  US Exchange: {exch['savings_deadline']} — "
+            f"savings goal ${exch['savings_goal']:,.0f}"
         )
 
     if flags:

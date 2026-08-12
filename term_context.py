@@ -109,6 +109,89 @@ def update_workout_schedule(schedule: dict):
     mutate_context(_mutate)
 
 
+# ── Finance goals ─────────────────────────────────────────────────────────────
+# Single source of truth for savings/budget targets, stored under the
+# pre-existing "us_exchange" key (was already live with savings_target/
+# target_date before this — extended here rather than duplicated under a
+# new name). finance_tracker.py and every brief/report that mentions these
+# reads from here instead of each keeping its own hardcoded copy.
+
+DEFAULT_FINANCE_GOALS = {
+    "savings_goal":     35000.00,
+    "savings_deadline": "2027-01-01",
+    "monthly_income":   2800.00,
+    "monthly_budget":   300.00,
+    "weekly_budget":    75.00,
+}
+
+
+def _normalise_deadline(raw) -> str:
+    """Parses an ISO date or a human 'January 2027'-style string into an ISO date string."""
+    raw = str(raw).strip()
+    try:
+        return datetime.date.fromisoformat(raw).isoformat()
+    except ValueError:
+        pass
+    for fmt in ("%B %Y", "%b %Y"):
+        try:
+            return datetime.datetime.strptime(raw, fmt).date().isoformat()
+        except ValueError:
+            continue
+    raise ValueError(f"unrecognised date format: {raw!r}")
+
+
+def get_finance_goals() -> dict:
+    """
+    Returns the savings/budget goals from ctx["us_exchange"], falling back to
+    defaults for any missing field. Transparently upgrades the legacy
+    savings_target/target_date field names and free-text dates this key
+    already held, so no manual migration is needed.
+    """
+    raw = load_context().get("us_exchange") or {}
+
+    savings_goal = raw.get("savings_goal", raw.get("savings_target", DEFAULT_FINANCE_GOALS["savings_goal"]))
+    deadline_raw = raw.get("savings_deadline", raw.get("target_date", DEFAULT_FINANCE_GOALS["savings_deadline"]))
+    try:
+        savings_deadline = _normalise_deadline(deadline_raw)
+    except ValueError:
+        savings_deadline = DEFAULT_FINANCE_GOALS["savings_deadline"]
+
+    return {
+        "savings_goal":     savings_goal,
+        "savings_deadline": savings_deadline,
+        "monthly_income":   raw.get("monthly_income", DEFAULT_FINANCE_GOALS["monthly_income"]),
+        "monthly_budget":   raw.get("monthly_budget", DEFAULT_FINANCE_GOALS["monthly_budget"]),
+        "weekly_budget":    raw.get("weekly_budget", DEFAULT_FINANCE_GOALS["weekly_budget"]),
+    }
+
+
+def update_finance_goals(goals: dict):
+    """
+    Overwrites the finance goals under ctx["us_exchange"]. `goals` must include
+    every key in DEFAULT_FINANCE_GOALS: the four dollar amounts as positive
+    numbers, and savings_deadline as an ISO date string (YYYY-MM-DD).
+    """
+    missing = DEFAULT_FINANCE_GOALS.keys() - goals.keys()
+    if missing:
+        raise ValueError(f"finance goals missing key(s): {sorted(missing)}")
+    for key in ("savings_goal", "monthly_income", "monthly_budget", "weekly_budget"):
+        if not isinstance(goals[key], (int, float)) or goals[key] <= 0:
+            raise ValueError(f"{key} must be a positive number")
+    try:
+        datetime.date.fromisoformat(goals["savings_deadline"])
+    except Exception:
+        raise ValueError("savings_deadline must be an ISO date string (YYYY-MM-DD)")
+
+    def _mutate(ctx):
+        existing = dict(ctx.get("us_exchange") or {})
+        existing.pop("savings_target", None)  # legacy field names, superseded below
+        existing.pop("target_date", None)
+        existing.update(goals)
+        ctx["us_exchange"] = existing
+
+    mutate_context(_mutate)
+
+
 # ── Week calculator ───────────────────────────────────────────────────────────
 
 def current_term_week(ctx: dict) -> int:
@@ -237,7 +320,7 @@ def get_term_summary() -> dict:
         "mentor":        ctx.get("mentor", {}),
         "extracurriculars": ctx.get("extracurriculars", []),
         "portfolio_targets": ctx.get("portfolio_targets", []),
-        "exchange_target": ctx.get("us_exchange", {}),
+        "exchange_target": get_finance_goals(),
     }
 
 

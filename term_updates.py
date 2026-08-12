@@ -52,6 +52,7 @@ ALLOWED_ACTIONS = {
     "assessment_due_set":       ["subject_code", "assessment_name", "due"],
     "assessment_submitted":     ["subject_code", "assessment_name"],
     "workout_schedule_change":  ["schedule"],
+    "finance_goal_change":      ["goals"],
 }
 
 
@@ -259,6 +260,10 @@ def apply_update(proposal):
 
         if action == "workout_schedule_change":
             term_context.update_workout_schedule(params["schedule"])
+            return True
+
+        if action == "finance_goal_change":
+            term_context.update_finance_goals(params["goals"])
             return True
 
         print(f"  ❌  Unknown action: {action}")

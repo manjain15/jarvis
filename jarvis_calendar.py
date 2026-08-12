@@ -280,6 +280,12 @@ def generate_daily_plan(sleep_hours=None, profile_text="", memory_text=""):
     current priorities, and tasks.
     """
     import anthropic
+    try:
+        from term_context import get_finance_goals
+        _fin_goals = get_finance_goals()
+        _savings_line = f"- Savings goal: ${_fin_goals['savings_goal']:,.0f} by {datetime.date.fromisoformat(_fin_goals['savings_deadline']).strftime('%B %Y')}"
+    except Exception:
+        _savings_line = "- Savings goal: see finance tracker"
 
     tz    = TIMEZONE
     now   = datetime.datetime.now(tz)
@@ -324,7 +330,7 @@ MANAV'S PRIORITIES (from profile):
 - Internship applications and career building (highest priority during holidays)
 - Gym training (PPLRUL split)
 - Pokemon reselling (sell existing inventory)
-- Savings goal: $35k by Jan 2027
+{_savings_line}
 - Building Jarvis
 
 CONTEXT:

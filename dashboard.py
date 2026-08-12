@@ -255,13 +255,15 @@ def api_data():
                 if other > 0:
                     categories.append({"name": "Other", "amount": round(other, 2), "transactions": other_txns})
 
+                from term_context import get_finance_goals
                 data["finance"] = {
                     "total_spend":   round(spending["total_spend"], 2),
-                    "weekly_budget": 75,
+                    "weekly_budget": get_finance_goals()["weekly_budget"],
                     "categories":    categories,
                     "savings": {
                         "current":    round(savings["total"], 2),
                         "goal":       savings["goal"],
+                        "deadline":   savings["deadline"].strftime("%B %Y"),
                         "remaining":  round(savings["remaining"], 2),
                         "pct":        round(savings["pct"], 1),
                         "on_track":   savings["on_track"],
@@ -855,7 +857,8 @@ function render(d) {
   }).join("");
 
   const totalSpend  = f.total_spend || 0;
-  const overBudget  = totalSpend > 75;
+  const weeklyBudget = f.weekly_budget || 75;
+  const overBudget  = totalSpend > weeklyBudget;
   const spendClass  = overBudget ? "over" : "ok";
   const savingsPct  = savings.pct || 0;
   const onTrack     = savings.on_track;
@@ -926,9 +929,9 @@ function render(d) {
 
     <!-- Savings -->
     <div class="card">
-      <div class="card-label">Savings — US exchange Jan 2027</div>
+      <div class="card-label">Savings — US exchange ${savings.deadline || ""}</div>
       <div class="savings-big">$${(savings.current || 0).toLocaleString("en-AU", {minimumFractionDigits:0, maximumFractionDigits:0})}</div>
-      <div class="savings-goal">of $35,000 goal · $${(savings.remaining || 0).toLocaleString("en-AU", {minimumFractionDigits:0, maximumFractionDigits:0})} remaining</div>
+      <div class="savings-goal">of $${(savings.goal || 0).toLocaleString("en-AU", {minimumFractionDigits:0, maximumFractionDigits:0})} goal · $${(savings.remaining || 0).toLocaleString("en-AU", {minimumFractionDigits:0, maximumFractionDigits:0})} remaining</div>
       <div class="progress-track">
         <div class="progress-fill" style="width:${Math.min(savingsPct,100)}%"></div>
       </div>
@@ -945,7 +948,7 @@ function render(d) {
     <div class="card">
       <div class="card-label">Spending — last 7 days</div>
       <div class="spend-total ${spendClass}">$${fmt(totalSpend)}</div>
-      <div class="spend-label">${overBudget ? "⚠ over" : "within"} ~$75/week budget</div>
+      <div class="spend-label">${overBudget ? "⚠ over" : "within"} ~$${weeklyBudget}/week budget</div>
       <div class="spend-bars">${spendBars || '<div style="color:var(--muted);font-size:12px">No spending data</div>'}</div>
     </div>
 
@@ -1047,7 +1050,7 @@ def ask():
             if EVERYDAY_CSV.exists():
                 savings = analyse_savings()
                 context_lines.append(
-                    f"Savings: ${savings['total']:,.2f} of $35,000 goal "
+                    f"Savings: ${savings['total']:,.2f} of ${savings['goal']:,.0f} goal "
                     f"({savings['pct']:.1f}%) — "
                     f"{'on track' if savings['on_track'] else 'behind schedule'}"
                 )

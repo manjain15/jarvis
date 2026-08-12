@@ -215,7 +215,7 @@ def load_todays_data():
             savings = analyse_savings()
             sections.append(
                 f"FINANCE:\n"
-                f"  Savings: ${savings['total']:,.2f} of $35,000 "
+                f"  Savings: ${savings['total']:,.2f} of ${savings['goal']:,.0f} "
                 f"({savings['pct']:.1f}%) — "
                 f"{'on track' if savings['on_track'] else 'behind — projected ' + savings['projected_date'].strftime('%B %Y')}"
             )

@@ -295,7 +295,7 @@ PROPOSAL_TOOLS = [
                     "enum": [
                         "internship_status_change", "internship_next_action",
                         "mentor_update", "assessment_due_set", "assessment_submitted",
-                        "workout_schedule_change",
+                        "workout_schedule_change", "finance_goal_change",
                     ],
                     "description": "Which kind of term_context.json update this is.",
                 },
@@ -312,7 +312,13 @@ PROPOSAL_TOOLS = [
                         "Saturday}} — ALL 7 weekdays required every time, each mapped to one "
                         "of Push/Pull/Legs/Rest/Upper/Sharms. When Manav describes a shift "
                         "(e.g. 'push everything back a day'), work out the full resulting "
-                        "7-day mapping yourself and pass it whole — don't pass a partial change."
+                        "7-day mapping yourself and pass it whole — don't pass a partial change; "
+                        "finance_goal_change -> {goals: {savings_goal, savings_deadline (ISO "
+                        "YYYY-MM-DD), monthly_income, monthly_budget, weekly_budget}} — ALL 5 "
+                        "fields required every time. Current values are in the TERM CONTEXT "
+                        "block under exchange_target — when Manav only mentions changing one "
+                        "field (e.g. 'my income went up to $3000'), carry the other 4 current "
+                        "values over unchanged and pass the full set."
                     ),
                 },
                 "summary": {

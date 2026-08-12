@@ -56,12 +56,16 @@ FINANCE_DIR.mkdir(exist_ok=True)
 TIMEZONE = pytz.timezone(config.TIMEZONE)
 
 # ── Savings goal ──────────────────────────────────────────────────────────────
-
-SAVINGS_GOAL      = 35000.00
-SAVINGS_DEADLINE  = datetime.date(2027, 1, 1)   # January 2027 exchange
-MONTHLY_INCOME    = 2800.00
-MONTHLY_BUDGET    = 300.00   # ~$300/month spending (~$75/week)
-WEEKLY_BUDGET     = 75.00
+# Goals themselves live in term_context.json (single source of truth, editable
+# via proposals) instead of being hardcoded here.
+try:
+    from term_context import get_finance_goals
+except Exception:
+    def get_finance_goals():
+        return {
+            "savings_goal": 35000.00, "savings_deadline": "2027-01-01",
+            "monthly_income": 2800.00, "monthly_budget": 300.00, "weekly_budget": 75.00,
+        }
 
 
 # ── Category rules ────────────────────────────────────────────────────────────
@@ -278,30 +282,35 @@ def analyse_spending(transactions, days=7):
 
 def analyse_savings():
     """
-    Reads main savings balance and calculates progress toward the $35k goal.
-    Investing account is reselling capital — tracked separately in analyse_reselling.
+    Reads main savings balance and calculates progress toward the savings goal
+    (see term_context.get_finance_goals()). Investing account is reselling
+    capital — tracked separately in analyse_reselling.
     """
+    goals            = get_finance_goals()
+    savings_goal     = goals["savings_goal"]
+    savings_deadline = datetime.date.fromisoformat(goals["savings_deadline"])
+
     bal1 = get_latest_balance(SAVINGS1_CSV)
 
     total = bal1 or 0
-    remaining = max(0, SAVINGS_GOAL - total)
-    pct = (total / SAVINGS_GOAL * 100) if SAVINGS_GOAL > 0 else 0
+    remaining = max(0, savings_goal - total)
+    pct = (total / savings_goal * 100) if savings_goal > 0 else 0
 
     # Project completion date based on current savings rate
     today = datetime.datetime.now(TIMEZONE).date()
-    days_to_deadline = (SAVINGS_DEADLINE - today).days
+    days_to_deadline = (savings_deadline - today).days
 
-    # Monthly savings rate (~95% of income)
-    monthly_savings = 2500.00  # ~$2,800 income - ~$300 spending
+    monthly_savings = goals["monthly_income"] - goals["monthly_budget"]
     months_needed   = remaining / monthly_savings if monthly_savings > 0 else 999
     projected_date  = today + datetime.timedelta(days=months_needed * 30.4)
 
-    on_track = projected_date <= SAVINGS_DEADLINE
+    on_track = projected_date <= savings_deadline
 
     return {
         "balance1":        bal1,
         "total":           total,
-        "goal":            SAVINGS_GOAL,
+        "goal":            savings_goal,
+        "deadline":        savings_deadline,
         "remaining":       remaining,
         "pct":             pct,
         "on_track":        on_track,
@@ -436,7 +445,7 @@ def get_finance_summary():
     if other > 0:
         lines.append(f"  {'Other':<18} ${other:.2f}")
 
-    weekly_budget = 75.00
+    weekly_budget = get_finance_goals()["weekly_budget"]
     over_budget = spending["total_spend"] > weekly_budget
     budget_str = f"  (⚠ over ~${weekly_budget:.0f}/week budget)" if over_budget else f"  (within ~${weekly_budget:.0f}/week budget)"
     lines.append(f"  {'Total spend':<18} ${spending['total_spend']:.2f}{budget_str}")
@@ -510,18 +519,23 @@ def get_finance_summary():
     savings = analyse_savings()
 
     if savings["total"] > 0:
+        goals = get_finance_goals()
         bar_filled = int(savings["pct"] / 5)  # 20 char bar
         bar = "█" * bar_filled + "░" * (20 - bar_filled)
-        lines.append(f"SAVINGS GOAL ($35k — US exchange Jan 2027):")
+        deadline_str = savings["deadline"].strftime("%B %Y")
+        lines.append(f"SAVINGS GOAL (${savings['goal']:,.0f} by {deadline_str}):")
         lines.append(f"  [{bar}] {savings['pct']:.1f}%")
         lines.append(f"  Current: ${savings['total']:,.2f}  |  Remaining: ${savings['remaining']:,.2f}")
 
         if savings["on_track"]:
             lines.append(f"  ✓ On track — projected to hit goal {savings['projected_date'].strftime('%B %Y')}")
         else:
-            lines.append(f"  ✗ Behind — projected {savings['projected_date'].strftime('%B %Y')} (deadline: Jan 2027)")
+            lines.append(f"  ✗ Behind — projected {savings['projected_date'].strftime('%B %Y')} (deadline: {deadline_str})")
 
-        lines.append(f"  Saving ~$2,500/month (~$2,800 income - ~$300 spending)")
+        lines.append(
+            f"  Saving ~${savings['monthly_savings']:,.0f}/month "
+            f"(~${goals['monthly_income']:,.0f} income - ~${goals['monthly_budget']:,.0f} spending)"
+        )
     else:
         lines.append("SAVINGS: Add savings CSV files to see progress.")
 

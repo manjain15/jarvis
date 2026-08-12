@@ -47,7 +47,7 @@ def proposals_lock():
 # noise and must never become a permanent profile.md edit.
 TRANSIENT_PATTERNS = [
     r"savings balance",
-    r"\$[\d,]+(\.\d{2})?\s*of\s*\$35",   # "$9,942.30 of $35,000" balance snapshots
+    r"\$[\d,]+(\.\d{2})?\s*of\s*\$[\d,]+",   # "$9,942.30 of $35,000" balance snapshots (any goal amount)
     r"behind pace",
     r"\bprojected\b",
     r"\bsleep\b",
