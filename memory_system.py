@@ -228,15 +228,15 @@ def load_todays_data():
 
 # ── Generate memory entries ───────────────────────────────────────────────────
 
-def generate_memory_entries(today_data):
+def generate_memory_entries(today_data, date=None):
     """
     Sends today's data to Claude and asks it to:
-    1. Write an episodic entry for today
+    1. Write an episodic entry for today (or `date`, if backfilling a past day)
     2. Identify any semantic facts that need updating
     Returns (episodic_entry, semantic_updates) as strings.
     """
     tz        = TIMEZONE
-    today     = datetime.datetime.now(tz).date()
+    today     = date or datetime.datetime.now(tz).date()
     today_str = today.strftime("%A, %d %B %Y")
 
     # Load existing memory for context

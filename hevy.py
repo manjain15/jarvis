@@ -68,11 +68,14 @@ def _get(endpoint, params=None):
 def fetch_recent_workouts(page=1, page_size=10):
     """
     Fetches recent workouts, most recent first.
-    Returns list of workout dicts.
+    Returns a list of workout dicts, or None if the API call itself failed
+    (rate limit, network error, etc). Callers must treat None as "unknown"
+    — not the same as "confirmed zero workouts" — or a transient API
+    failure gets silently misread as "nothing happened today".
     """
     data = _get("workouts", {"page": page, "pageSize": page_size})
-    if not data:
-        return []
+    if data is None:
+        return None
     return data.get("workouts", [])
 
 

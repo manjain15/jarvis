@@ -154,6 +154,8 @@ def check_training_alert():
     try:
         from hevy import fetch_recent_workouts, parse_workout_date
         workouts = fetch_recent_workouts(page_size=5)
+        if workouts is None:
+            return False  # Hevy API call failed — can't confirm, don't alert
         trained_today = any(
             parse_workout_date(w) and parse_workout_date(w).date() == today
             for w in workouts
