@@ -16,7 +16,7 @@
 
 set -euo pipefail
 
-VPS="jarvis@162.55.172.98"
+VPS="jarvis@34.63.231.218"
 SSH_KEY="$HOME/.ssh/id_ed25519"
 
 # Resolve data/ relative to the repo root (this script lives in deploy/).
