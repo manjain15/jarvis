@@ -43,6 +43,8 @@ SLASH COMMANDS:
   /internship Co key=val ...   — update internship (status, next_action)
   /mentor "topic" [awaiting]   — log a mentor touchpoint
   /log <free text>             — append a one-line note to episodic memory
+  /remote project instruction  — kick off a headless remote-work session
+  /remotestatus project        — check the latest remote-work session
 
 Anything else → conversation with Claude, who has your profile + term
 context + memory in scope.
@@ -244,6 +246,14 @@ change; he still approves or rejects it himself with /approve. Don't
 call a tool for transient day-to-day chat (moods, today's plans,
 balances, one-off scheduling) — only for things that belong in his
 persistent profile or term tracker.
+
+You can also kick off a remote coding session against one of his
+registered GitHub projects (start_remote_work) when he asks you to
+build/fix/change something in a specific project by name. Each session
+works in an isolated git worktree on its own branch and nothing is ever
+pushed or merged automatically — he reviews and pushes it himself later.
+Only use registered project names (ask him which project if unclear).
+Use check_remote_work to report back on a session he asks about.
 """
 
 
@@ -333,6 +343,44 @@ PROPOSAL_TOOLS = [
             "required": ["action", "params", "summary", "reason"],
         },
     },
+    {
+        "name": "start_remote_work",
+        "description": (
+            "Starts a headless Claude Code session against one of Manav's registered "
+            "GitHub projects, working in an isolated git worktree on a fresh branch. "
+            "Nothing is ever pushed or merged automatically — this only produces a "
+            "local branch Manav reviews and pushes himself later. Use only for a "
+            "clearly specified project and task, not vague requests."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "project": {
+                    "type": "string",
+                    "description": "Registered project name to work in (ask Manav if unclear which one).",
+                },
+                "instruction": {
+                    "type": "string",
+                    "description": "The coding task to carry out, in enough detail to act on unsupervised.",
+                },
+            },
+            "required": ["project", "instruction"],
+        },
+    },
+    {
+        "name": "check_remote_work",
+        "description": "Reports the status of the most recent remote-work session for a project.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "project": {
+                    "type": "string",
+                    "description": "Registered project name to check.",
+                },
+            },
+            "required": ["project"],
+        },
+    },
 ]
 
 
@@ -362,6 +410,17 @@ def _handle_tool_call(block):
             pending = get_pending_proposals()
             pid = max((p["id"] for p in pending), default="?")
             return f"📝 Queued term proposal [{pid}] — /approve term {pid}"
+
+        if block.name == "start_remote_work":
+            from remote_work import start_session
+            session_id, error = start_session(block.input["project"], block.input["instruction"])
+            if error:
+                return f"⚠️ {error}"
+            return f"🛠️ Started remote-work session [{session_id}] — I'll ping you when it's done."
+
+        if block.name == "check_remote_work":
+            from remote_work import check_session
+            return check_session(block.input["project"])
 
         return f"⚠️ Unknown tool: {block.name}"
     except Exception as e:
@@ -420,6 +479,8 @@ def cmd_help(_args):
         "/internship Co key=val ... — update internship\n"
         "/mentor \"topic\" [true|false] — log mentor touchpoint\n"
         "/log <text> — append a note to episodic memory\n"
+        "/remote project \"instruction\" — start a headless remote-work session\n"
+        "/remotestatus project — check the latest remote-work session\n"
         "/status — health-check the VPS daemons\n"
         "/checkin — start the evening check-in now\n"
         "/cancel — abort an in-progress check-in\n"
@@ -664,6 +725,32 @@ def cmd_mentor(args):
         return f"⚠️ {e}"
 
 
+def cmd_remote(args):
+    """/remote project instruction... — kicks off a headless remote-work session."""
+    if len(args) < 2:
+        return 'Usage: /remote project "instruction" — e.g. /remote myproject "add rate limiting"'
+    project, instruction = args[0], " ".join(args[1:])
+    try:
+        from remote_work import start_session
+        session_id, error = start_session(project, instruction)
+    except Exception as e:
+        return f"⚠️ Remote work failed to start: {e}"
+    if error:
+        return f"⚠️ {error}"
+    return f"🛠️ Started remote-work session [{session_id}] — I'll ping you when it's done."
+
+
+def cmd_remotestatus(args):
+    """/remotestatus project — reports the latest remote-work session for a project."""
+    if not args:
+        return "Usage: /remotestatus project"
+    try:
+        from remote_work import check_session
+        return check_session(args[0])
+    except Exception as e:
+        return f"⚠️ Could not check remote-work status: {e}"
+
+
 def cmd_log(args):
     if not args:
         return "Usage: /log <free text> — appends a note to episodic memory."
@@ -753,6 +840,8 @@ COMMANDS = {
     "/mentor":     cmd_mentor,
     "/log":        cmd_log,
     "/status":     cmd_status,
+    "/remote":       cmd_remote,
+    "/remotestatus": cmd_remotestatus,
 }
 
 
