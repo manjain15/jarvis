@@ -18,6 +18,10 @@ NTFY_CHANNEL       = os.environ.get("NTFY_CHANNEL", "")
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_CHAT_ID   = int(os.environ.get("TELEGRAM_CHAT_ID", "0"))
 
+# Fine-grained PAT, Contents + Pull requests read/write, scoped to your own repos.
+# Used by remote_work.py to look up/clone your projects and open PRs. Empty = dormant.
+GITHUB_TOKEN       = os.environ.get("GITHUB_TOKEN", "")
+
 # UNSW timetable: subscribed .ics feed URL (webcal:// or https://...ics).
 # Empty = integration dormant; see uni_timetable.py.
 TIMETABLE_ICS_URL  = os.environ.get("TIMETABLE_ICS_URL", "")

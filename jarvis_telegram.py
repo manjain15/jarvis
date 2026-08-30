@@ -43,7 +43,8 @@ SLASH COMMANDS:
   /internship Co key=val ...   — update internship (status, next_action)
   /mentor "topic" [awaiting]   — log a mentor touchpoint
   /log <free text>             — append a one-line note to episodic memory
-  /remote project instruction  — kick off a headless remote-work session
+  /addproject name [repo-search] — register one of your GitHub repos
+  /remote project instruction [--pr] — kick off a headless remote-work session
   /remotestatus project        — check the latest remote-work session
 
 Anything else → conversation with Claude, who has your profile + term
@@ -250,10 +251,14 @@ persistent profile or term tracker.
 You can also kick off a remote coding session against one of his
 registered GitHub projects (start_remote_work) when he asks you to
 build/fix/change something in a specific project by name. Each session
-works in an isolated git worktree on its own branch and nothing is ever
-pushed or merged automatically — he reviews and pushes it himself later.
-Only use registered project names (ask him which project if unclear).
-Use check_remote_work to report back on a session he asks about.
+works in an isolated git worktree on its own branch. By default nothing
+is ever pushed or merged — he reviews the branch himself later. Only set
+open_pr=true when he explicitly asks for a PR/merge request on that run;
+that pushes the branch and opens a PR for him to review (still never
+merges anything). Only use registered project names (ask him which
+project if unclear, or use register_project to look one up on GitHub by
+name first). Use check_remote_work to report back on a session he asks
+about.
 """
 
 
@@ -363,6 +368,10 @@ PROPOSAL_TOOLS = [
                     "type": "string",
                     "description": "The coding task to carry out, in enough detail to act on unsupervised.",
                 },
+                "open_pr": {
+                    "type": "boolean",
+                    "description": "Only true if Manav explicitly asked for a PR/merge request on this run. Defaults to false (local branch only).",
+                },
             },
             "required": ["project", "instruction"],
         },
@@ -379,6 +388,28 @@ PROPOSAL_TOOLS = [
                 },
             },
             "required": ["project"],
+        },
+    },
+    {
+        "name": "register_project",
+        "description": (
+            "Looks up one of Manav's own GitHub repos by name and registers it so "
+            "start_remote_work can target it. Use when he mentions a project that "
+            "isn't registered yet."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Short name to register the project under (how Manav will refer to it).",
+                },
+                "repo_query": {
+                    "type": "string",
+                    "description": "GitHub repo name (or search term) to look up. Defaults to `name` if omitted.",
+                },
+            },
+            "required": ["name"],
         },
     },
 ]
@@ -413,7 +444,10 @@ def _handle_tool_call(block):
 
         if block.name == "start_remote_work":
             from remote_work import start_session
-            session_id, error = start_session(block.input["project"], block.input["instruction"])
+            session_id, error = start_session(
+                block.input["project"], block.input["instruction"],
+                open_pr=block.input.get("open_pr", False),
+            )
             if error:
                 return f"⚠️ {error}"
             return f"🛠️ Started remote-work session [{session_id}] — I'll ping you when it's done."
@@ -421,6 +455,13 @@ def _handle_tool_call(block):
         if block.name == "check_remote_work":
             from remote_work import check_session
             return check_session(block.input["project"])
+
+        if block.name == "register_project":
+            from remote_work import register_project
+            info, error = register_project(block.input["name"], block.input.get("repo_query"))
+            if error:
+                return f"⚠️ {error}"
+            return f"📎 Registered '{block.input['name']}' → {info['full_name']}"
 
         return f"⚠️ Unknown tool: {block.name}"
     except Exception as e:
@@ -479,7 +520,8 @@ def cmd_help(_args):
         "/internship Co key=val ... — update internship\n"
         "/mentor \"topic\" [true|false] — log mentor touchpoint\n"
         "/log <text> — append a note to episodic memory\n"
-        "/remote project \"instruction\" — start a headless remote-work session\n"
+        "/addproject name [repo-search] — register one of your GitHub repos\n"
+        "/remote project \"instruction\" [--pr] — start a headless remote-work session\n"
         "/remotestatus project — check the latest remote-work session\n"
         "/status — health-check the VPS daemons\n"
         "/checkin — start the evening check-in now\n"
@@ -726,13 +768,15 @@ def cmd_mentor(args):
 
 
 def cmd_remote(args):
-    """/remote project instruction... — kicks off a headless remote-work session."""
+    """/remote project instruction... [--pr] — kicks off a headless remote-work session."""
+    open_pr = "--pr" in args
+    args = [a for a in args if a != "--pr"]
     if len(args) < 2:
-        return 'Usage: /remote project "instruction" — e.g. /remote myproject "add rate limiting"'
+        return 'Usage: /remote project "instruction" [--pr] — e.g. /remote myproject "add rate limiting" --pr'
     project, instruction = args[0], " ".join(args[1:])
     try:
         from remote_work import start_session
-        session_id, error = start_session(project, instruction)
+        session_id, error = start_session(project, instruction, open_pr=open_pr)
     except Exception as e:
         return f"⚠️ Remote work failed to start: {e}"
     if error:
@@ -749,6 +793,22 @@ def cmd_remotestatus(args):
         return check_session(args[0])
     except Exception as e:
         return f"⚠️ Could not check remote-work status: {e}"
+
+
+def cmd_addproject(args):
+    """/addproject name [repo-query] — looks up one of Manav's GitHub repos and registers it."""
+    if not args:
+        return "Usage: /addproject name [repo-search-term]"
+    name = args[0]
+    repo_query = " ".join(args[1:]) if len(args) > 1 else None
+    try:
+        from remote_work import register_project
+        info, error = register_project(name, repo_query)
+    except Exception as e:
+        return f"⚠️ Could not register project: {e}"
+    if error:
+        return f"⚠️ {error}"
+    return f"📎 Registered '{name}' → {info['full_name']} (default branch: {info['default_branch']})"
 
 
 def cmd_log(args):
@@ -842,6 +902,7 @@ COMMANDS = {
     "/status":     cmd_status,
     "/remote":       cmd_remote,
     "/remotestatus": cmd_remotestatus,
+    "/addproject":   cmd_addproject,
 }
 
 

@@ -25,6 +25,7 @@ profile_backup_*.md
 # Live state — VPS is authoritative; local checkout copies go stale
 profile.md
 term_context.json
+remote_work/
 
 # Mac
 .DS_Store
