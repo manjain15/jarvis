@@ -32,6 +32,7 @@ USAGE (from jarvis_telegram.py's chat tools):
   check_session("myproject")
 """
 
+import os
 import re
 import json
 import base64
@@ -188,7 +189,7 @@ def _open_pull_request(project, full_name, branch, base_branch, instruction, sum
     except Exception as e:
         return None, f"push failed: {e}"
     if push.returncode != 0:
-        return None, "push failed (see logs)"
+        return None, f"push failed: {push.stderr.strip()[-500:]}"
 
     try:
         resp = requests.post(
@@ -220,6 +221,12 @@ def _run_claude_code(session_id, project, worktree_dir, instruction, open_pr, br
             "clear commit message. Do not push or open a PR yourself."
         )
 
+    # Strip Jarvis's own ANTHROPIC_API_KEY from the child's environment — its mere
+    # presence makes the `claude` CLI silently prefer pay-per-token API billing
+    # over the `claude login` subscription these sessions are meant to run under.
+    env = os.environ.copy()
+    env.pop("ANTHROPIC_API_KEY", None)
+
     log_path = worktree_dir / "session.log"
     try:
         with open(log_path, "w") as log_file:
@@ -229,6 +236,7 @@ def _run_claude_code(session_id, project, worktree_dir, instruction, open_pr, br
                 stdout=log_file,
                 stderr=subprocess.STDOUT,
                 timeout=SESSION_TIMEOUT_SECONDS,
+                env=env,
             )
         status = "done" if result.returncode == 0 else "failed"
     except subprocess.TimeoutExpired:
