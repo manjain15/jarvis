@@ -5,7 +5,8 @@ Reads from Google Sheets via gspread and computes P&L summary.
 Sheet: manj → general tab
 Columns (0-based, row 1 = headers skipped):
   B(1):STATUS  C(2):Category  D(3):Name  E(4):Purchase Date  F(5):Sale Date
-  G(6):Cost($) H(7):Sale Price($) I(8):Platform J(9):Fees($) K(10):Net P/L  L(11):% Margin  M(12):Notes
+  G(6):Deposit Paid($) H(7):Deposit Owing($)
+  I(8):Cost($) J(9):Sale Price($) K(10):Platform L(11):Fees($) M(12):Net P/L  N(13):% Margin  O(14):Notes
 
 Statuses: Sold, In Stock, Paid Pending Shipping, Deposit Paid
 """
@@ -29,11 +30,13 @@ COL_CATEGORY      = 2   # C
 COL_NAME          = 3   # D
 COL_PURCHASE_DATE = 4   # E
 COL_SALE_DATE     = 5   # F
-COL_COST          = 6   # G
-COL_SALE_PRICE    = 7   # H
-COL_PLATFORM      = 8   # I
-COL_FEES          = 9   # J
-COL_NOTES         = 12  # M
+COL_DEPOSIT_PAID  = 6   # G
+COL_DEPOSIT_OWING = 7   # H
+COL_COST          = 8   # I
+COL_SALE_PRICE    = 9   # J
+COL_PLATFORM      = 10  # K
+COL_FEES          = 11  # L
+COL_NOTES         = 14  # O
 
 VALID_STATUSES = {"sold", "in stock", "paid pending shipping", "deposit paid"}
 SKIP_CATEGORIES = {"membership"}  # Don't include these in P&L
@@ -52,6 +55,13 @@ class Item:
     purchase_date: Optional[datetime] = None
     sale_date: Optional[datetime] = None
     notes: str = ""
+    deposit_paid: float = 0.0
+    deposit_owing: float = 0.0
+
+    @property
+    def capital_committed(self) -> float:
+        """Cash actually out the door: full cost if known, else just the deposit paid so far."""
+        return self.cost if self.cost else self.deposit_paid
 
     @property
     def net_profit(self) -> Optional[float]:
@@ -151,6 +161,9 @@ def _parse_row(row: list) -> Optional[Item]:
     s_date     = _safe_date(get(COL_SALE_DATE)) if COL_SALE_DATE is not None else None
     notes      = get(COL_NOTES) if COL_NOTES is not None else ""
 
+    deposit_paid  = _safe_float(get(COL_DEPOSIT_PAID)) or 0.0
+    deposit_owing = _safe_float(get(COL_DEPOSIT_OWING)) or 0.0
+
     return Item(
         status        = status_raw,
         category      = category,
@@ -162,6 +175,8 @@ def _parse_row(row: list) -> Optional[Item]:
         purchase_date = p_date,
         sale_date     = s_date,
         notes         = notes,
+        deposit_paid  = deposit_paid,
+        deposit_owing = deposit_owing,
     )
 
 
@@ -190,7 +205,8 @@ def compute_summary(items: list[Item]) -> dict:
     net_pl        = gross_pl - total_fees
 
     capital_stock   = sum(i.cost for i in stock)
-    capital_pending = sum(i.cost for i in pending)
+    capital_pending = sum(i.capital_committed for i in pending)
+    deposits_owing  = sum(i.deposit_owing for i in pending if i.status == "deposit paid")
 
     # Per-category P&L (sold items only)
     by_cat: dict[str, dict] = defaultdict(lambda: {"profit": 0.0, "count": 0, "revenue": 0.0})
@@ -221,6 +237,7 @@ def compute_summary(items: list[Item]) -> dict:
         "avg_margin_pct":   avg_margin,
         "capital_stock":    capital_stock,
         "capital_pending":  capital_pending,
+        "deposits_owing":   deposits_owing,
         "by_category":      dict(by_cat),
         "best_flip":        best,
         "worst_flip":       worst,
@@ -261,6 +278,10 @@ def get_reselling_summary() -> str:
         lines.append(
             f"  Capital tied up: ${s['capital_stock']:,.0f} (inventory)  +  ${s['capital_pending']:,.0f} (pending shipping)"
         )
+
+    # Deposits still owed on items the bot has part-paid
+    if s["deposits_owing"] > 0:
+        lines.append(f"  💸 Deposits owing: ${s['deposits_owing']:,.2f} (still to pay to complete purchase)")
 
     # Per-category breakdown
     if s["by_category"]:
