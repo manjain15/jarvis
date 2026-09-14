@@ -192,6 +192,71 @@ def update_finance_goals(goals: dict):
     mutate_context(_mutate)
 
 
+# ── Term rollover ─────────────────────────────────────────────────────────────
+
+def get_term_history() -> list:
+    """Returns archived past terms, each as {"term": {...}, "subjects": [...]}."""
+    return load_context().get("term_history", [])
+
+
+def archive_term():
+    """
+    Snapshots the current ctx["term"] + ctx["subjects"] into ctx["term_history"]
+    and clears ctx["subjects"]. No-op if there's no current term set.
+    """
+    def _mutate(ctx):
+        if not ctx.get("term"):
+            return
+        ctx.setdefault("term_history", []).append({
+            "term":     ctx["term"],
+            "subjects": ctx.get("subjects", []),
+        })
+        ctx["subjects"] = []
+
+    mutate_context(_mutate)
+
+
+def start_new_term(name: str, start_date: str, subjects: list = None):
+    """
+    Archives the current term (if any) into term_history, then sets ctx["term"]
+    and ctx["subjects"] to the new term. `start_date` must be an ISO date string
+    (YYYY-MM-DD). `subjects` is a list of subject dicts (each needs at least
+    "code"); defaults to an empty list if not given.
+    """
+    try:
+        datetime.date.fromisoformat(start_date)
+    except ValueError:
+        raise ValueError("start_date must be an ISO date string (YYYY-MM-DD)")
+
+    archive_term()
+
+    def _mutate(ctx):
+        ctx["term"] = {"name": name, "week": 1, "start_date": start_date}
+        ctx["subjects"] = subjects or []
+
+    mutate_context(_mutate)
+    print(f"✅ Started new term: {name}")
+
+
+def add_subject(code: str, name: str, assessments: list = None):
+    """
+    Adds a new subject to the current term if it's not already there.
+    Usage: add_subject("MATH2931", "Higher Linear Models")
+    """
+    def _mutate(ctx):
+        subjects = ctx.setdefault("subjects", [])
+        if any(s["code"].upper() == code.upper() for s in subjects):
+            return
+        subjects.append({
+            "code": code.upper(),
+            "name": name,
+            "assessments": assessments or [],
+        })
+
+    mutate_context(_mutate)
+    print(f"✅ Added subject {code.upper()}")
+
+
 # ── Week calculator ───────────────────────────────────────────────────────────
 
 def current_term_week(ctx: dict) -> int:

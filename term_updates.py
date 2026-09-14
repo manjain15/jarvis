@@ -251,12 +251,29 @@ def apply_update(proposal):
                                 a["weight"] = params["weight"]
                             matched["name"] = a["name"]
                             return
+                    # Subject exists but this assessment doesn't yet — add it.
+                    subject.setdefault("assessments", []).append({
+                        "name":   params["assessment_name"],
+                        "due":    params["due"],
+                        "weight": params.get("weight"),
+                        "status": "pending",
+                    })
+                    matched["name"] = params["assessment_name"]
+                    return
 
             term_context.mutate_context(_mutate)
             if matched:
                 return True
-            print(f"  ❌  Assessment not found: {params['subject_code']} / {params['assessment_name']}")
-            return False
+            # Subject itself isn't tracked for the current term yet — create it
+            # (name TBD) so the assessment has somewhere to live, rather than
+            # silently rejecting this proposal every night.
+            term_context.add_subject(params["subject_code"], name="TBD", assessments=[{
+                "name":   params["assessment_name"],
+                "due":    params["due"],
+                "weight": params.get("weight"),
+                "status": "pending",
+            }])
+            return True
 
         if action == "workout_schedule_change":
             term_context.update_workout_schedule(params["schedule"])
