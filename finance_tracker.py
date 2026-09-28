@@ -10,6 +10,7 @@ HOW IT WORKS:
        finance/everyday.csv   — your spending account
        finance/savings1.csv   — main savings (US exchange Jan 2027 goal)
        finance/investing.csv  — reselling working capital (separate P&L)
+       finance/revolut.csv    — Revolut reselling account (preferred over investing.csv)
   3. Morning brief calls get_finance_summary() and injects the result
 
 CSV FORMAT (St. George):
@@ -50,6 +51,10 @@ FINANCE_DIR  = SCRIPT_DIR / "finance"
 EVERYDAY_CSV  = FINANCE_DIR / "everyday.csv"
 SAVINGS1_CSV  = FINANCE_DIR / "savings1.csv"
 INVESTING_CSV = FINANCE_DIR / "investing.csv"
+REVOLUT_CSV   = FINANCE_DIR / "revolut.csv"
+
+# Transfers to/from these names are moves between your own accounts, not sales/purchases.
+REVOLUT_OWN_NAMES = ("manav jain",)
 
 FINANCE_DIR.mkdir(exist_ok=True)
 
@@ -223,6 +228,59 @@ def parse_stgeorge_csv(filepath):
     return sorted(transactions, key=lambda t: t["date"], reverse=True)
 
 
+def parse_revolut_csv(filepath):
+    """
+    Parses a Revolut statement CSV export (AUD only, COMPLETED rows only).
+    Returns transactions newest-first as {date, description, debit, credit,
+    balance, category, internal}. internal=True for top-ups and transfers
+    to/from your own accounts (money moving in/out, not purchases or sales).
+    Ordered by completed time (file order breaks ties) so [0] holds the
+    latest balance.
+    """
+    transactions = []
+    if not filepath.exists():
+        return transactions
+
+    with open(filepath, newline="", encoding="utf-8-sig") as f:
+        for idx, row in enumerate(csv.DictReader(f)):
+            try:
+                if (row.get("State") or "").strip().upper() != "COMPLETED":
+                    continue
+                if (row.get("Currency") or "AUD").strip().upper() != "AUD":
+                    continue
+                completed = datetime.datetime.strptime(
+                    row["Completed Date"].strip(), "%Y-%m-%d %H:%M:%S")
+                amount = float(row["Amount"])
+                fee    = float(row.get("Fee") or 0)
+                balance_str = (row.get("Balance") or "").strip()
+                balance = float(balance_str) if balance_str else None
+
+                description = re.sub(r"\s+", " ", (row.get("Description") or "").strip())
+                kind = (row.get("Type") or "").strip().lower()
+                internal = kind == "topup" or (
+                    kind == "transfer"
+                    and any(n in description.lower() for n in REVOLUT_OWN_NAMES)
+                )
+
+                transactions.append({
+                    "date":        completed.date(),
+                    "description": description,
+                    "debit":       round(max(-amount, 0) + fee, 2),
+                    "credit":      round(max(amount, 0), 2),
+                    "balance":     balance,
+                    "category":    "Reselling",
+                    "internal":    internal,
+                    "_key":        (completed, idx),
+                })
+            except (ValueError, KeyError):
+                continue
+
+    transactions.sort(key=lambda t: t["_key"], reverse=True)
+    for t in transactions:
+        del t["_key"]
+    return transactions
+
+
 def get_latest_balance(filepath):
     """Returns the most recent balance from a CSV file."""
     transactions = parse_stgeorge_csv(filepath)
@@ -324,28 +382,37 @@ def analyse_savings():
 
 def analyse_reselling(days=30):
     """
-    Analyses the investing account as reselling working capital.
+    Analyses the reselling account's working capital.
     Debits = inventory purchases (capital deployed).
     Credits = sale proceeds (capital returned).
-    Excludes internal transfers (lump-sum top-ups from savings).
+    Uses finance/revolut.csv when present (own top-ups/transfers excluded via
+    parse_revolut_csv), otherwise the St. George investing.csv (internal
+    transfers excluded by description).
     """
-    txns = parse_stgeorge_csv(INVESTING_CSV)
     today  = datetime.datetime.now(TIMEZONE).date()
     cutoff = today - datetime.timedelta(days=days)
 
-    recent = [
-        t for t in txns
-        if t["date"] >= cutoff
-        and "internet deposit"    not in t["description"].lower()
-        and "internet withdrawal" not in t["description"].lower()
-        and "sct deposit"         not in t["description"].lower()
-        and "transfer"            not in t["description"].lower()
-    ]
+    if REVOLUT_CSV.exists():
+        txns    = parse_revolut_csv(REVOLUT_CSV)
+        recent  = [t for t in txns if t["date"] >= cutoff and not t["internal"]]
+        balance = next((t["balance"] for t in txns if t["balance"] is not None), None)
+        available = True
+    else:
+        txns = parse_stgeorge_csv(INVESTING_CSV)
+        recent = [
+            t for t in txns
+            if t["date"] >= cutoff
+            and "internet deposit"    not in t["description"].lower()
+            and "internet withdrawal" not in t["description"].lower()
+            and "sct deposit"         not in t["description"].lower()
+            and "transfer"            not in t["description"].lower()
+        ]
+        balance   = get_latest_balance(INVESTING_CSV)
+        available = INVESTING_CSV.exists()
 
     deployed = sum(t["debit"]  for t in recent)
     returned = sum(t["credit"] for t in recent)
     net      = returned - deployed
-    balance  = get_latest_balance(INVESTING_CSV)
 
     return {
         "deployed":  round(deployed, 2),
@@ -354,7 +421,7 @@ def analyse_reselling(days=30):
         "balance":   balance,
         "txn_count": len(recent),
         "days":      days,
-        "available": INVESTING_CSV.exists(),
+        "available": available,
     }
 
 

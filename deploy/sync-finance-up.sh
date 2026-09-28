@@ -7,7 +7,7 @@
 #
 # Transport: the same key-based SSH path used for the repo sync (no Tailscale).
 # Idempotent: re-running just overwrites; the CSV names are fixed
-# (everyday.csv / savings1.csv / investing.csv).
+# (everyday.csv / savings1.csv / investing.csv / revolut.csv).
 #
 # Usage:
 #   deploy/sync-finance-up.sh            # push
