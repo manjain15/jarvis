@@ -31,7 +31,7 @@ import shutil
 import subprocess
 
 # Units the watchdog checks. Keep in sync with deploy/systemd/.
-ALWAYS_ON     = ["jarvis-telegram"]            # .service must be active
+ALWAYS_ON     = ["jarvis-telegram", "jarvis-agent-api"]  # .service must be active
 TIMER_UNITS   = [
     "jarvis-morningbrief", "jarvis-alerts", "jarvis-gmail",
     "jarvis-memory", "jarvis-jobsearch",

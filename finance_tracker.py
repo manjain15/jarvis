@@ -399,6 +399,7 @@ def analyse_reselling(days=30):
         recent  = [t for t in txns if t["date"] >= cutoff and not t["internal"]]
         balance = next((t["balance"] for t in txns if t["balance"] is not None), None)
         available = True
+        source = "revolut"
     else:
         txns = parse_stgeorge_csv(INVESTING_CSV)
         recent = [
@@ -411,6 +412,7 @@ def analyse_reselling(days=30):
         ]
         balance   = get_latest_balance(INVESTING_CSV)
         available = INVESTING_CSV.exists()
+        source = "investing" if available else "none"
 
     refunds  = sum(t["credit"] for t in recent if t.get("refund"))
     deployed = sum(t["debit"]  for t in recent) - refunds
@@ -425,6 +427,7 @@ def analyse_reselling(days=30):
         "txn_count": len(recent),
         "days":      days,
         "available": available,
+        "source":    source,
     }
 
 
@@ -615,6 +618,66 @@ def get_finance_summary():
         lines.append("📅 MONTHLY REVIEW DAY — review last month's spending and update your budget.")
 
     return "\n".join(lines)
+
+
+def _is_internal_spend(description):
+    """True for moves between the owner's own accounts, which are not spending."""
+    desc = (description or "").lower()
+    return "internet withdrawal" in desc or "transfer" in desc
+
+
+def summarise_spending(transactions, start, end, weekly_budget):
+    """
+    Category totals and weekly-budget comparison for an inclusive date range.
+
+    Drops the same internal transfers analyse_spending leaves out of total_spend
+    (internet withdrawals and transfers) so the category totals add up to
+    total_spend. Descriptions are included only on large debits; callers that
+    send this to an external agent must redact account numbers first.
+    """
+    recent = [
+        t for t in transactions
+        if start <= t["date"] <= end
+        and t.get("debit", 0) > 0
+        and not _is_internal_spend(t.get("description", ""))
+    ]
+
+    by_category = {}
+    for t in recent:
+        cat = t.get("category") or "Other"
+        by_category[cat] = by_category.get(cat, 0) + t["debit"]
+    by_category = {cat: round(amount, 2) for cat, amount in by_category.items()}
+
+    total = round(sum(by_category.values()), 2)
+    span_days = (end - start).days + 1
+    weekly_budget = round(float(weekly_budget), 2)
+    window_budget = round(weekly_budget * span_days / 7.0, 2)
+
+    flagged = []
+    for t in recent:
+        if t["debit"] < 80 or "osko withdrawal" in t.get("description", "").lower():
+            continue
+        flagged.append({
+            "date": t["date"].isoformat(),
+            "amount": round(t["debit"], 2),
+            "category": t.get("category") or "Other",
+            "description": (t.get("description") or "")[:80],
+        })
+    flagged.sort(key=lambda row: row["amount"], reverse=True)
+
+    return {
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "days": span_days,
+        "by_category": by_category,
+        "total_spend": total,
+        "transaction_count": len(recent),
+        "weekly_budget": weekly_budget,
+        "budget_for_range": window_budget,
+        "over_budget": total > window_budget,
+        "weekly_equivalent": round(total * 7.0 / span_days, 2) if span_days else 0.0,
+        "flagged": flagged[:4],
+    }
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
