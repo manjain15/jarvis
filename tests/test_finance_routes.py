@@ -237,6 +237,98 @@ def test_finance_bundle_isolates_section_errors(tmp_path, monkeypatch):
     assert ACCOUNT not in res.get_data(as_text=True)
 
 
+def test_own_account_transfers_are_not_spending(tmp_path, monkeypatch):
+    """The 22–28 Sep 2026 pattern: self-Osko and Revolut top-ups are not spend.
+
+    Dated on today so the default 7-day window includes them. GET /finance
+    and GET /finance/spending share summarise_spending.
+    """
+    today = _today()
+    everyday, savings = _patch_files(monkeypatch, tmp_path)
+    monkeypatch.setattr(agent_api, "load_reselling_inventory", lambda: {"net_pl": 0})
+
+    def row(description, debit, credit=""):
+        return [_dmy(today), description, debit, credit, "1000.00"]
+
+    _write_csv(everyday, [
+        row("Osko Withdrawal 22Sep Knockout R Jaiswal", "120.00"),
+        row("Osko Withdrawal 23Sep Knockout R Jaiswal", "120.00"),
+        row("Osko Withdrawal 24Sep Doomsday Tix Abhishek Goyal", "25.00"),
+        row("Visa Purchase 24Sep Playstation London", "14.95"),
+        row("Visa Purchase 24Sep Paypal *Guzmanygome", "3.60"),
+        row("Visa Purchase 22Sep Tfnsw Opal", "6.90"),
+        row("Visa Purchase 23Sep Tfnsw Opal", "4.80"),
+        row("Osko Withdrawal 25Sep Change For Hot Wheels W Tynan", "10.00"),
+        row("Osko Withdrawal 24Sep12:03 Kmart 30Th Manav Jain", "5000.00"),
+        row("Osko Withdrawal 24Sep12:12 Test Manav Jain", "1.00"),
+        row("Osko Withdrawal 27Sep20:42 Op 17 Blisters Manav Jain", "54.00"),
+        row("Visa Purchase 24Sep Revolut**5228* Melbourne", "6000.00"),
+        row("Visa Purchase 22Sep Revolut**5228* Melbourne", "390.00"),
+        row("Visa Purchase 22Sep Revolut**5228* Melbourne", "135.00"),
+        row("Sct Deposit 24Sep Sent From Revolut Manav Jain", "", "1.00"),
+    ])
+    _write_csv(savings, [[_dmy(today), "Interest", "", "1.00", "8000.00"]])
+
+    client = _client()
+    spending = client.get("/finance/spending", headers=AUTH)
+    assert spending.status_code == 200
+    body = spending.get_json()
+    assert body["total_spend"] == 305.25
+    assert body["by_category"] == {
+        "Entertainment": 254.95,
+        "Other": 38.60,
+        "Transport": 11.70,
+    }
+    assert sorted(item["amount"] for item in body["flagged"]) == [120.0, 120.0]
+    text = spending.get_data(as_text=True).lower()
+    assert "revolut" not in text
+    assert "manav" not in text
+    assert "knockout" in text
+
+    bundle = client.get("/finance", headers=AUTH)
+    assert bundle.status_code == 200
+    bundled = bundle.get_json()
+    assert bundled["spending"]["total_spend"] == 305.25
+    assert bundled["savings"]["balance"] == 8000.0
+    assert bundled["savings"]["available"] is True
+    assert "revolut" not in bundle.get_data(as_text=True).lower()
+
+
+def test_refund_reduces_spending_for_the_week(tmp_path, monkeypatch):
+    """First Knockout $120 is refunded next morning; the repurchase still counts."""
+    today = _today()
+    yesterday = today - datetime.timedelta(days=1)
+    everyday, _savings = _patch_files(monkeypatch, tmp_path)
+
+    def row(day, description, debit, credit=""):
+        return [_dmy(day), description, debit, credit, "1000.00"]
+
+    _write_csv(everyday, [
+        row(yesterday, "Osko Withdrawal 22Sep18:35 Knockout R Jaiswal", "120.00"),
+        row(today, "Sct Deposit 23Sep09:11 Rishi Jaiswal", "", "120.00"),
+        row(today, "Osko Withdrawal 23Sep10:30 Knockout R Jaiswal", "120.00"),
+        row(today, "Osko Withdrawal 24Sep Doomsday Tix Abhishek Goyal", "25.00"),
+        row(today, "Visa Purchase 24Sep Playstation London", "14.95"),
+        row(today, "Visa Purchase 24Sep Paypal *Guzmanygome", "3.60"),
+        row(yesterday, "Visa Purchase 22Sep Tfnsw Opal", "6.90"),
+        row(today, "Visa Purchase 23Sep Tfnsw Opal", "4.80"),
+        row(today, "Osko Withdrawal 25Sep Change For Hot Wheels W Tynan", "10.00"),
+        row(today, "Osko Deposit 24Sep Pokemon Gemma Johnston", "", "390.00"),
+        row(today, "Osko Deposit 24Sep Bank Carlos Santos", "", "135.00"),
+        row(today, "Osko Deposit 25Sep Bank Carlos Santos", "", "54.00"),
+        row(today, "Sct Deposit 26Sep Advance", "", "500.00"),
+        row(today, "Osko Deposit 27Sep Nilesh Banga", "", "17000.00"),
+    ])
+    res = _client().get("/finance/spending", headers=AUTH)
+    assert res.status_code == 200
+    body = res.get_json()
+    assert body["total_spend"] == 185.25
+    assert body["by_category"]["Entertainment"] == 134.95
+    assert body["by_category"]["Transport"] == 11.70
+    assert body["by_category"]["Other"] == 38.60
+    assert [item["amount"] for item in body["flagged"]] == [120.0]
+
+
 def test_redact_leaves_dates_and_amounts():
     payload = {"when": "2026-09-28", "amount": 22.5, "note": f"paid {ACCOUNT}"}
     cleaned = agent_api.redact_account_numbers(payload)
@@ -244,3 +336,58 @@ def test_redact_leaves_dates_and_amounts():
     assert cleaned["amount"] == 22.5
     assert ACCOUNT not in cleaned["note"]
     assert "[redacted]" in cleaned["note"]
+    assert agent_api.redact_account_numbers("total $14.50") == "total $14.50"
+    assert agent_api.redact_account_numbers("2026-09-22 2026-09-28") == "2026-09-22 2026-09-28"
+
+
+def test_redact_each_sensitive_shape():
+    shapes = {
+        "card spaces": "4111 1111 1111 1111",
+        "card dashes": "4111-1111-1111-1111",
+        "spaced account": "000 020 685 0220",
+        "spaced phone": "0412 345 678",
+        "dashed phone": "0412-345-678",
+        "masked last4": "xx1234",
+        "masked stars": "card **5228",
+        "payid email": "alex.jain+rent@payid.com.au",
+    }
+    for label, secret in shapes.items():
+        cleaned = agent_api.redact_account_numbers(f"paid {secret} today")
+        assert secret not in cleaned, label
+        assert "[redacted]" in cleaned, label
+
+    osko = agent_api.redact_account_numbers("Osko Withdrawal 22Sep Knockout R Jaiswal")
+    assert "Jaiswal" not in osko
+    assert "Knockout" in osko
+    assert "[redacted]" in osko
+    sct = agent_api.redact_account_numbers("Sct Deposit 23Sep09:11 Rishi Jaiswal")
+    assert "Jaiswal" not in sct
+    assert "Rishi" not in sct
+
+
+def test_flagged_description_is_redacted_before_truncation(tmp_path, monkeypatch):
+    today = _today()
+    everyday, _savings = _patch_files(monkeypatch, tmp_path)
+    pan = "4111222233334444"
+    desc = ("M" * 73) + pan
+    fragment = desc[:80][73:]
+    assert len(fragment) == 7
+    spaced = "Visa Purchase SHOP 4111 1111 1111 1111"
+    _write_csv(everyday, [
+        [_dmy(today), desc, "200.00", "", "100.00"],
+        [_dmy(today), "Osko Withdrawal 22Sep Knockout R Jaiswal", "120.00", "", "100.00"],
+        [_dmy(today), spaced, "90.00", "", "100.00"],
+    ])
+    res = _client().get("/finance/spending", headers=AUTH)
+    assert res.status_code == 200
+    text = res.get_data(as_text=True)
+    flagged = res.get_json()["flagged"]
+    assert pan not in text
+    assert fragment not in text
+    assert "4111" not in text
+    assert "Jaiswal" not in text
+    assert "Knockout" in text
+    assert all(len(row["description"]) <= 80 for row in flagged)
+    long = next(row for row in flagged if row["amount"] == 200)
+    assert "[redacted]" in long["description"]
+    assert long["description"].endswith("[redacted]")

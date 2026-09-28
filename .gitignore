@@ -26,6 +26,7 @@ profile_backup_*.md
 # Live state — VPS is authoritative; local checkout copies go stale
 profile.md
 term_context.json
+term_context.json.bak
 remote_work/
 
 # Mac

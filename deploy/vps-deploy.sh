@@ -8,18 +8,20 @@
 # What it does:
 #   1. Fast-forward ~/jarvis to origin/main (refuses diverged history)
 #   2. Reinstall deps only if requirements-vps.txt changed
-#   3. Install changed unit files under deploy/systemd/ and daemon-reload
-#      when sudo allows it. A denied sudo is logged and does not abort.
-#   4. Restart the long-running telegram daemon only if code changed
+#   3. Try to install changed unit files. If sudo denies the copy, log the
+#      manual command and continue. Unit installs stay manual.
+#   4. daemon-reload when a unit was copied and sudo allows it
+#   5. Restart the long-running telegram daemon only if code changed
 #      (timer-based jobs pick up new code on their next run automatically)
 #
-# sudoers for the user that runs this script (usually jarvis). The script
-# prints these again when a command is denied:
+# sudoers for the user that runs this script (usually jarvis). Install with:
+#   sudo visudo -f /etc/sudoers.d/jarvis-deploy
 #   jarvis ALL=(root) NOPASSWD: /usr/bin/systemctl restart jarvis-agent-api.service
 #   jarvis ALL=(root) NOPASSWD: /usr/bin/systemctl daemon-reload
-#   jarvis ALL=(root) NOPASSWD: /usr/bin/cp /home/jarvis/jarvis/deploy/systemd/jarvis-*.service /etc/systemd/system/jarvis-*.service, /usr/bin/cp /home/jarvis/jarvis/deploy/systemd/jarvis-*.timer /etc/systemd/system/jarvis-*.timer
-# Restart of jarvis-agent-api.service is non-fatal: telegram and spend still
-# restart, and a missing sudoers rule cannot abort the deploy halfway.
+# Do not grant sudo cp of deploy/systemd. That user can edit the unit files,
+# and a wildcard cp rule is root access. Restart of jarvis-agent-api.service
+# is non-fatal: telegram and spend still restart, and a missing sudoers rule
+# cannot abort the deploy halfway.
 
 set -euo pipefail
 
@@ -59,10 +61,12 @@ install_changed_units() {
         if sudo -n /usr/bin/cp "$unit" "$dst/$name"; then
             changed=1
         else
-            echo "⚠️  Could not install $name (sudo cp was denied). Deploy is continuing."
-            echo "    Add this sudoers line for ${user}, then copy the unit by hand:"
-            echo "    ${user} ALL=(root) NOPASSWD: /usr/bin/cp ${src}/jarvis-*.service ${dst}/jarvis-*.service, /usr/bin/cp ${src}/jarvis-*.timer ${dst}/jarvis-*.timer"
+            echo "⚠️  Could not install $name. Unit installs stay manual. Deploy is continuing."
+            echo "    Do not add a sudoers rule for cp. ${user} can edit these unit files,"
+            echo "    and a wildcard cp grant is root access."
+            echo "    Copy it by hand:"
             echo "    sudo /usr/bin/cp ${unit} ${dst}/${name}"
+            echo "    sudo /usr/bin/systemctl daemon-reload"
         fi
     done
     shopt -u nullglob

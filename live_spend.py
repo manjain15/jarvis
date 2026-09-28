@@ -110,10 +110,11 @@ def generate_token():
 
 # ── Logging + reading ─────────────────────────────────────────────────────────
 
-def log_spend(amount, category, note=""):
-    """
-    Validates and appends one spend entry to data/live_spend.jsonl.
-    Returns the stored entry dict. Raises ValueError on bad input.
+def normalise_spend(amount, category, note=""):
+    """Validate a live spend and return the amount, category, and note to store.
+
+    Does not write a file. log_spend uses this so a caller can recognise a
+    retry of the same amount, category, and note before appending a line.
     """
     try:
         amount = round(float(amount), 2)
@@ -129,12 +130,18 @@ def log_spend(amount, category, note=""):
         raise ValueError(f"unknown category '{category}' — valid: {sorted(VALID_CATEGORIES)}")
 
     note = str(note or "").strip()[:200]
+    return {"amount": amount, "category": match, "note": note}
 
+
+def log_spend(amount, category, note=""):
+    """
+    Validates and appends one spend entry to data/live_spend.jsonl.
+    Returns the stored entry dict. Raises ValueError on bad input.
+    """
+    fields = normalise_spend(amount, category, note)
     entry = {
-        "ts":       datetime.datetime.now(TIMEZONE).isoformat(timespec="seconds"),
-        "amount":   amount,
-        "category": match,
-        "note":     note,
+        "ts": datetime.datetime.now(TIMEZONE).isoformat(timespec="seconds"),
+        **fields,
     }
     DATA_DIR.mkdir(exist_ok=True)
     with open(SPEND_FILE, "a", encoding="utf-8") as f:

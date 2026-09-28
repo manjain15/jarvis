@@ -32,9 +32,10 @@ Do not open the port on the public firewall. See docs/API.md.
 COST:
   POST /ask is one Claude call, the same order of cost as a Telegram message.
   GET /memory/search hits Mem0 (OpenAI embeddings). Do not poll either.
-  Mentor and internship writes do not call Anthropic. They update
-  term_context.json through term_context.mutate_context and append
-  data/agent_api_audit.jsonl.
+  Mentor, internship, and spend writes do not call Anthropic. Mentor and
+  internship updates go through term_context.mutate_context, which refuses
+  to replace a term_context.json that exists but will not parse. Spend
+  calls live_spend.log_spend. All three append data/agent_api_audit.jsonl.
   GET /finance* is read-only. It reads local CSVs and term_context goals.
   Reselling inventory also reads the Google Sheet once per call. No Anthropic.
   A weekly Money check should call GET /finance, not poll it.
@@ -101,10 +102,26 @@ _actor_var = contextvars.ContextVar("jarvis_api_actor", default=None)
 
 _TAG_RE = re.compile(r"<[^>]+>")
 _BREAK_RE = re.compile(r"<br\s*/?>|</p>|</h[1-6]>|</li>|</div>|</tr>", re.I)
-# St. George descriptions embed the owner's own account numbers as long digit
-# runs. 8+ digits also covers card PANs. Dates and dollar amounts are shorter
-# or contain separators, so they are left alone.
-_ACCOUNT_DIGITS = re.compile(r"\d{8,}")
+# 8+ digits, including spaces or dashes between them (cards, spaced account
+# and phone numbers). Calendar dates are restored by the replacer. Masked
+# last-4s (xx1234, **5228) and PayID emails are separate patterns.
+_SEP_NUMBER = re.compile(r"(?<!\d)(?:\d[ -]*){7,}\d(?!\d)")
+_MASKED_LAST4 = re.compile(r"(?i)(?<!\d)(?:x{2,}|\*{2,})[ -]?\d{3,4}(?!\d)")
+_EMAIL = re.compile(
+    r"(?i)(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}(?![A-Za-z0-9])"
+)
+_TRANSFER_LINE = re.compile(r"(?i)\b(?:osko|sct|payid)\b")
+_PAYEE_TAIL = re.compile(r"(?i)\s+[A-Za-z]+\s+[A-Za-z]+\s*$")
+_REDACTED = "[redacted]"
+_IDEMPOTENCY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$")
+_SPEND_BODY_KEYS = {"actor", "reason", "amount", "category", "note"}
+_SPEND_DEDUPE_WINDOW = datetime.timedelta(seconds=60)
+_FLAGGED_DESCRIPTION_LIMIT = 80
+_SAMPLE_LIMIT = 45
+
+
+class SpendConflict(Exception):
+    """An Idempotency-Key was reused for a different spend."""
 
 
 def api_token():
@@ -654,6 +671,124 @@ def log_spend_entry(amount, category, note=""):
     }
 
 
+def _clean_idempotency_key(raw):
+    """Return a usable Idempotency-Key, or None when the header is absent."""
+    if raw is None:
+        return None
+    key = str(raw).strip()
+    if not key:
+        return None
+    if not _IDEMPOTENCY_RE.fullmatch(key):
+        raise ValueError("Idempotency-Key must be 1-200 letters, digits, or . _ : -")
+    return key
+
+
+def _spend_fingerprint(target):
+    """Comparable (amount, category, note) for a spend audit target."""
+    if not isinstance(target, dict):
+        return None
+    try:
+        amount = round(float(target.get("amount")), 2)
+    except (TypeError, ValueError):
+        return None
+    return (amount, target.get("category"), target.get("note"))
+
+
+def _audit_time(raw):
+    """Parse an audit timestamp, or return None when it is not usable."""
+    try:
+        ts = datetime.datetime.fromisoformat(raw)
+    except (TypeError, ValueError):
+        return None
+    if ts.tzinfo is None:
+        ts = TIMEZONE.localize(ts)
+    return ts
+
+
+def _spend_response_from_row(row):
+    """HTTP body stored on a spend audit line, rebuilt if an older line lacks it."""
+    response = row.get("response")
+    if isinstance(response, dict):
+        return response
+    entry = row.get("new") if isinstance(row.get("new"), dict) else {}
+    try:
+        amount = float(entry.get("amount") or 0)
+    except (TypeError, ValueError):
+        amount = 0.0
+    category = entry.get("category") or ""
+    return {
+        "ok": True,
+        "logged": f"${amount:.2f} {category}",
+        "week_total": None,
+        "entry": entry,
+    }
+
+
+def _find_spend_replay(identity, key):
+    """Return a prior spend response when this request is a retry.
+
+    A repeated Idempotency-Key replays that spend at any age, and 409s when
+    the amount, category, or note differ. With no key, the same
+    amount+category+note inside 60 seconds is one spend. Caller holds the
+    audit lock.
+    """
+    fingerprint = _spend_fingerprint(identity)
+    now = datetime.datetime.now(TIMEZONE)
+    for row in reversed(_read_audit_entries()):
+        if row.get("action") != "spend":
+            continue
+        if key and row.get("idempotency_key") == key:
+            if _spend_fingerprint(row.get("target")) != fingerprint:
+                raise SpendConflict("Idempotency-Key already used for a different spend")
+            return _spend_response_from_row(row)
+        if key:
+            continue
+        ts = _audit_time(row.get("ts"))
+        if ts is None or now - ts > _SPEND_DEDUPE_WINDOW:
+            continue
+        if _spend_fingerprint(row.get("target")) == fingerprint:
+            return _spend_response_from_row(row)
+    return None
+
+
+def apply_spend(body, idempotency_key=None):
+    """Log one spend, audit who logged it, and collapse retries.
+
+    The audit actor is the bearer token: owner for JARVIS_API_TOKEN, or the
+    bot name. A body actor is accepted and ignored, even when it is blank or
+    malformed, so existing callers are not rejected. Optional reason is
+    audit-only. Idempotency-Key, when present, replays the original
+    response. Without it, an identical amount, category, and note inside
+    60 seconds is not written a second time.
+    """
+    _json_object(body)
+    _reject_unknown_fields(body, _SPEND_BODY_KEYS)
+    _reject_nulls(body)
+    actor = _request_actor()
+    reason = _reason(body)
+    key = _clean_idempotency_key(idempotency_key)
+    from live_spend import normalise_spend
+    identity = normalise_spend(body.get("amount"), body.get("category"), body.get("note", ""))
+
+    with file_lock(AUDIT_FILE):
+        replay = _find_spend_replay(identity, key)
+        if replay is not None:
+            return replay
+        result = log_spend_entry(identity["amount"], identity["category"], identity["note"])
+        entry = _audit_entry(
+            actor,
+            "spend",
+            identity,
+            reason,
+            None,
+            result.get("entry"),
+        )
+        entry["idempotency_key"] = key
+        entry["response"] = result
+        _write_audit_line(entry)
+        return result
+
+
 def _json_object(body):
     """Require a JSON object. Flask returns None for a missing or invalid body."""
     if not isinstance(body, dict):
@@ -689,6 +824,18 @@ def _reason(body):
     return text
 
 
+def _write_audit_line(entry):
+    """Append one audit line. Caller must already hold the audit file lock."""
+    if not isinstance(entry, dict):
+        raise ValueError("audit entry must be an object")
+    line = json.dumps(entry, ensure_ascii=False, default=str, separators=(",", ":")) + "\n"
+    AUDIT_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with open(AUDIT_FILE, "a", encoding="utf-8") as handle:
+        handle.write(line)
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
 def append_external_audit(entry):
     """
     Append one JSON line to data/agent_api_audit.jsonl.
@@ -697,15 +844,25 @@ def append_external_audit(entry):
     values). Locked so two writers cannot interleave a line. This file is
     gitignored with the rest of data/ and is not exposed over HTTP.
     """
-    if not isinstance(entry, dict):
-        raise ValueError("audit entry must be an object")
-    line = json.dumps(entry, ensure_ascii=False, default=str, separators=(",", ":")) + "\n"
-    AUDIT_FILE.parent.mkdir(parents=True, exist_ok=True)
     with file_lock(AUDIT_FILE):
-        with open(AUDIT_FILE, "a", encoding="utf-8") as handle:
-            handle.write(line)
-            handle.flush()
-            os.fsync(handle.fileno())
+        _write_audit_line(entry)
+
+
+def _read_audit_entries():
+    """Return parsed audit objects. Skips torn lines. Caller holds the lock."""
+    if not AUDIT_FILE.exists():
+        return []
+    rows = []
+    for line in AUDIT_FILE.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(row, dict):
+            rows.append(row)
+    return rows
 
 
 def _audit_entry(actor, action, target, reason, old, new):
@@ -836,20 +993,107 @@ def apply_internship_add(body):
     }
 
 
-def redact_account_numbers(value):
-    """
-    Replace 8+ digit runs anywhere in a JSON-like structure.
+def _is_calendar_date(token):
+    """True when token is a real ISO or day-month-year date."""
+    for fmt in ("%Y-%m-%d", "%d-%m-%Y"):
+        try:
+            datetime.datetime.strptime(token, fmt)
+            return True
+        except ValueError:
+            continue
+    return False
 
-    Finance descriptions quote internal transfer account numbers. Totals,
-    dates, and category names do not contain a run that long.
+
+def _only_calendar_dates(raw):
+    """True when every whitespace-separated token is a calendar date."""
+    tokens = [part for part in raw.split() if part]
+    return bool(tokens) and all(_is_calendar_date(part) for part in tokens)
+
+
+def redact_text(text):
+    """Redact card, account, and phone numbers, masked last-4s, PayID emails, and Osko payees.
+
+    Digit runs may contain spaces or dashes, as long as there are at least
+    eight digits. A match made only of real dates is left in place. On an
+    Osko, Sct, or PayID line the last two words (the payee) are removed.
     """
+    if not isinstance(text, str) or text == "":
+        return text
+
+    def _numbers(match):
+        raw = match.group(0)
+        if _only_calendar_dates(raw):
+            return raw
+        return _REDACTED
+
+    cleaned = _EMAIL.sub(_REDACTED, text)
+    cleaned = _MASKED_LAST4.sub(_REDACTED, cleaned)
+    cleaned = _SEP_NUMBER.sub(_numbers, cleaned)
+    if _TRANSFER_LINE.search(cleaned):
+        cleaned = _PAYEE_TAIL.sub(" " + _REDACTED, cleaned)
+    return cleaned
+
+
+def redact_account_numbers(value):
+    """Walk a JSON-like structure and redact sensitive text in every string."""
     if isinstance(value, str):
-        return _ACCOUNT_DIGITS.sub("[redacted]", value)
+        return redact_text(value)
     if isinstance(value, list):
         return [redact_account_numbers(item) for item in value]
     if isinstance(value, dict):
         return {key: redact_account_numbers(item) for key, item in value.items()}
     return value
+
+
+def _truncate_redacted(text, limit):
+    """Shorten text without splitting a [redacted] marker.
+
+    If the cut lands inside a marker, keep the marker and shorten the prefix
+    so the replacement is still visible and no partial token leaks.
+    """
+    if not isinstance(text, str) or len(text) <= limit:
+        return text
+    cut = text[:limit]
+    start = cut.rfind("[")
+    if start < 0 or not _REDACTED.startswith(cut[start:]) or cut[start:] == _REDACTED:
+        return cut
+    if text[start:start + len(_REDACTED)] != _REDACTED:
+        return cut[:start].rstrip()
+    prefix_len = max(0, limit - len(_REDACTED))
+    prefix = text[:start][:prefix_len].rstrip()
+    candidate = prefix + _REDACTED
+    if len(candidate) <= limit:
+        return candidate
+    return _REDACTED[:limit]
+
+
+def _shorten_flagged_descriptions(summary):
+    """Cap flagged descriptions after redaction.
+
+    Truncating first can leave a 7-digit fragment of a card number that the
+    8-digit pattern no longer matches.
+    """
+    flagged = summary.get("flagged") if isinstance(summary, dict) else None
+    if not isinstance(flagged, list):
+        return summary
+    for row in flagged:
+        if isinstance(row, dict) and isinstance(row.get("description"), str):
+            row["description"] = _truncate_redacted(row["description"], _FLAGGED_DESCRIPTION_LIMIT)
+    return summary
+
+
+def _shorten_subscription_samples(payload):
+    """Cap subscription samples after redaction."""
+    if not isinstance(payload, dict):
+        return payload
+    for bucket in ("known", "review"):
+        rows = payload.get(bucket)
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if isinstance(row, dict) and isinstance(row.get("sample"), str):
+                row["sample"] = _truncate_redacted(row["sample"], _SAMPLE_LIMIT)
+    return payload
 
 
 def _parse_iso_date(raw, name):
@@ -932,7 +1176,7 @@ def get_spending_payload(start, end):
                 "matched": live.get("matched"),
                 "unmatched_count": len(live.get("unmatched") or []),
             }
-    return redact_account_numbers(summary)
+    return _shorten_flagged_descriptions(redact_account_numbers(summary))
 
 
 def get_savings_payload():
@@ -974,7 +1218,8 @@ def get_savings_payload():
 def get_subscriptions_payload(months):
     """Detected recurring charges from the everyday CSV, known vs needs review."""
     from subscription_audit import summarise_subscriptions
-    return redact_account_numbers(summarise_subscriptions(months=months))
+    payload = redact_account_numbers(summarise_subscriptions(months=months))
+    return _shorten_subscription_samples(payload)
 
 
 def load_reselling_inventory():
@@ -1196,8 +1441,9 @@ def create_app(token=None, bot_tokens=None):
     @app.post("/ask")
     def ask():
         """Free-text question. Same conversational brain as Telegram, read-only."""
-        body = request.get_json(silent=True) or {}
+        body = request.get_json(silent=True)
         try:
+            _json_object(body)
             question = _clean_question(body.get("question", ""))
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
@@ -1261,14 +1507,15 @@ def create_app(token=None, bot_tokens=None):
 
     @app.post("/spend")
     def spend():
-        """Log one spend entry. Same validation as the Back Tap endpoint."""
-        body = request.get_json(silent=True) or {}
+        """Log one spend. Records actor in the audit log and collapses retries."""
+        body = request.get_json(silent=True)
         try:
-            return jsonify(log_spend_entry(
-                body.get("amount"),
-                body.get("category"),
-                body.get("note", ""),
+            return jsonify(apply_spend(
+                body,
+                request.headers.get("Idempotency-Key"),
             ))
+        except SpendConflict as e:
+            return jsonify({"error": str(e)}), 409
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
         except Exception as e:
@@ -1279,7 +1526,11 @@ def create_app(token=None, bot_tokens=None):
         """Run a term-context write and map record errors to HTTP status codes."""
         body = request.get_json(silent=True)
         try:
+            _json_object(body)
             return jsonify(handler(body)), success_status
+        except term_context.TermContextUnreadable as e:
+            print(f"⚠️  {label} refused: {e}")
+            return jsonify({"error": str(e)}), 409
         except term_context.TermRecordNotFound as e:
             return jsonify({"error": str(e)}), 404
         except term_context.TermRecordConflict as e:

@@ -44,7 +44,10 @@ class _Scripted:
         class _Messages:
             def create(_self, **kwargs):
                 client.calls.append(kwargs)
-                text, stop = client.script[len(client.calls) - 1]
+                item = client.script[len(client.calls) - 1]
+                if isinstance(item, BaseException):
+                    raise item
+                text, stop = item
                 return _Msg(text, stop)
 
         self.messages = _Messages()
@@ -126,3 +129,50 @@ def test_salvage_drops_a_dangling_tag():
     body, note = html.split("<p><em>", 1)
     assert body == "<h2>Hello</h2>"
     assert note.startswith("Brief shortened to fit")
+
+
+def test_salvage_closes_nested_and_unclosed_tags():
+    nested = morning_brief.salvage_truncated_html("<div><section><p>Nested.")
+    assert "Nested." in nested
+    assert nested.count("<div>") == nested.count("</div>")
+    assert nested.count("<section>") == nested.count("</section>")
+    assert nested.count("<p>") == nested.count("</p>")
+    assert nested.index("</p>") < nested.index("</section>") < nested.index("</div>")
+
+    unclosed = morning_brief.salvage_truncated_html("<h2>Title<p>Body")
+    assert unclosed.count("<h2>") == unclosed.count("</h2>")
+    assert unclosed.count("<p>") == unclosed.count("</p>")
+    assert unclosed.index("</p>") < unclosed.index("</h2>")
+    assert "Body" in unclosed
+
+    dangling = morning_brief.salvage_truncated_html("<div><p>Hi</p><span")
+    assert "<span" not in dangling
+    assert dangling.startswith("<div><p>Hi</p>")
+    assert "</div>" in dangling
+
+
+def _api_status(code):
+    """Build an Anthropic status error without calling the network."""
+    http_mod = None
+    for name in ("httpx", "httpx2"):
+        try:
+            http_mod = __import__(name)
+            break
+        except ImportError:
+            continue
+    request = http_mod.Request("POST", "https://api.anthropic.com/v1/messages")
+    response = http_mod.Response(code, request=request)
+    return morning_brief.anthropic.APIStatusError("retry failed", response=response, body=None)
+
+
+def test_failed_retry_returns_the_salvaged_first_body(monkeypatch):
+    first = "<h2>Good morning.</h2><p>Keep this first draft.</p><ul><li>open."
+    for error in (_api_status(500), ConnectionError("connection reset")):
+        scripted = _install(monkeypatch, [(first, "max_tokens"), error])
+        html = morning_brief.generate_brief("facts")
+        assert "Keep this first draft" in html
+        assert "Brief shortened to fit" in html
+        assert html.count("<ul>") == html.count("</ul>")
+        assert html.count("<li>") == html.count("</li>")
+        assert "connection reset" not in html
+        assert len(scripted.calls) == 2

@@ -32,7 +32,9 @@ external corrections hit the same locked, atomic file the flags read.
 
 import json
 import datetime
+import os
 import re
+import tempfile
 from pathlib import Path
 
 import pytz
@@ -88,13 +90,69 @@ class TermRecordConflict(Exception):
     """The internship match is ambiguous, or that application already exists."""
 
 
+class TermContextUnreadable(Exception):
+    """term_context.json is present but cannot be read as a JSON object.
+
+    Writers must raise this and leave the file untouched. Treating a
+    truncated file as ``{}`` and saving it drops every record except the
+    one the caller just added.
+    """
+
+
 # ── Loader ────────────────────────────────────────────────────────────────────
 
 def load_context() -> dict:
+    """Return term context. A missing file is an empty document.
+
+    A file that exists but cannot be parsed, or that is not a JSON object,
+    raises TermContextUnreadable. Callers that only display data may catch
+    that and continue; mutate_context does not.
+    """
     try:
-        return json.loads(CONTEXT_FILE.read_text())
-    except Exception:
+        raw = CONTEXT_FILE.read_text(encoding="utf-8")
+    except FileNotFoundError:
         return {}
+    except OSError as exc:
+        raise TermContextUnreadable(
+            "term_context.json exists but could not be read; refusing to overwrite"
+        ) from exc
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise TermContextUnreadable(
+            "term_context.json exists but could not be parsed; refusing to overwrite"
+        ) from exc
+    if not isinstance(data, dict):
+        raise TermContextUnreadable(
+            "term_context.json exists but is not a JSON object; refusing to overwrite"
+        )
+    return data
+
+
+def _backup_context_file():
+    """Copy term_context.json to term_context.json.bak before it is replaced."""
+    if not CONTEXT_FILE.exists():
+        return
+    dest = CONTEXT_FILE.parent / (CONTEXT_FILE.name + ".bak")
+    payload = CONTEXT_FILE.read_bytes()
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{dest.name}.",
+        suffix=".tmp",
+        dir=dest.parent,
+    )
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(tmp_name, 0o644)
+        os.replace(tmp_name, dest)
+    except Exception:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
 
 
 def mutate_context(mutate_fn):
@@ -103,10 +161,15 @@ def mutate_context(mutate_fn):
     the full load -> mutate -> save cycle so a concurrent cron job or
     Telegram command can't clobber this write. `mutate_fn(ctx)` mutates
     the loaded dict in place.
+
+    A missing file is created. A file that exists but will not parse raises
+    TermContextUnreadable and is not written. The previous bytes are copied
+    to term_context.json.bak before each successful replace.
     """
     with file_lock(CONTEXT_FILE):
         ctx = load_context()
         mutate_fn(ctx)
+        _backup_context_file()
         atomic_write_json(CONTEXT_FILE, ctx)
         return ctx
 
@@ -174,6 +237,24 @@ DEFAULT_FINANCE_GOALS = {
     "weekly_budget":    75.00,
 }
 
+# Moves between the owner's own accounts. finance_tracker uses this so the
+# weekly budget ignores self-transfers (Osko to yourself, Revolut top-ups).
+# Override in term_context.json under "own_accounts"; missing fields keep these.
+DEFAULT_OWN_ACCOUNT_RULES = {
+    "owner_names": ["manav jain"],
+    "withdrawal_markers": [
+        "osko withdrawal",
+        "internet withdrawal",
+        "sct withdrawal",
+    ],
+    "card_patterns": ["revolut**5228", "revolut"],
+    "card_rails": ["visa purchase", "eftpos", "top-up", "topup"],
+}
+
+# How long after a purchase a matching credit can still offset it.
+# Override with spending.refund_window_days in term_context.json (1–60).
+DEFAULT_REFUND_WINDOW_DAYS = 14
+
 
 def _normalise_deadline(raw) -> str:
     """Parses an ISO date or a human 'January 2027'-style string into an ISO date string."""
@@ -213,6 +294,49 @@ def get_finance_goals() -> dict:
         "monthly_budget":   raw.get("monthly_budget", DEFAULT_FINANCE_GOALS["monthly_budget"]),
         "weekly_budget":    raw.get("weekly_budget", DEFAULT_FINANCE_GOALS["weekly_budget"]),
     }
+
+
+def get_own_account_rules() -> dict:
+    """
+    Patterns for money moving between the owner's own accounts.
+
+    Reads ctx["own_accounts"] when present. Missing or empty fields fall back
+    to DEFAULT_OWN_ACCOUNT_RULES. Every entry is a lowercase substring.
+    owner_names match a payee anywhere in an Osko/internet/Sct withdrawal.
+    card_patterns match top-ups of an account he already holds (Revolut).
+    """
+    raw = load_context().get("own_accounts") or {}
+    if not isinstance(raw, dict):
+        raw = {}
+
+    def _strings(key):
+        value = raw.get(key, DEFAULT_OWN_ACCOUNT_RULES[key])
+        if not isinstance(value, (list, tuple)):
+            value = DEFAULT_OWN_ACCOUNT_RULES[key]
+        cleaned = [str(item).strip().lower() for item in value if str(item).strip()]
+        return cleaned or list(DEFAULT_OWN_ACCOUNT_RULES[key])
+
+    return {key: _strings(key) for key in DEFAULT_OWN_ACCOUNT_RULES}
+
+
+def get_refund_window_days() -> int:
+    """
+    Days after a debit that a matching credit can still count as its refund.
+
+    Reads spending.refund_window_days from term_context.json. Missing or
+    out-of-range values fall back to DEFAULT_REFUND_WINDOW_DAYS (14).
+    """
+    raw = load_context().get("spending") or {}
+    if not isinstance(raw, dict):
+        return DEFAULT_REFUND_WINDOW_DAYS
+    value = raw.get("refund_window_days", DEFAULT_REFUND_WINDOW_DAYS)
+    try:
+        days = int(value)
+    except (TypeError, ValueError):
+        return DEFAULT_REFUND_WINDOW_DAYS
+    if days < 1 or days > 60:
+        return DEFAULT_REFUND_WINDOW_DAYS
+    return days
 
 
 def update_finance_goals(goals: dict):

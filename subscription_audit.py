@@ -18,7 +18,7 @@ from collections import defaultdict
 
 import pytz
 import config
-from finance_tracker import parse_stgeorge_csv, EVERYDAY_CSV
+from finance_tracker import parse_stgeorge_csv, EVERYDAY_CSV, _is_internal_spend
 
 TIMEZONE = pytz.timezone(config.TIMEZONE)
 
@@ -89,6 +89,7 @@ def find_recurring(transactions, months=3):
         and t["debit"] > 0
         and not any(acc in t["description"] for acc in OWN_ACCOUNTS)
         and not any(kw in t["description"].lower() for kw in NORMAL_RECURRING)
+        and not _is_internal_spend(t.get("description", ""))
     ]
 
     # Group by normalised merchant
@@ -114,7 +115,7 @@ def find_recurring(transactions, months=3):
                 "avg_amount": round(avg_amount, 2),
                 "total":      round(sum(t["debit"] for t in txns), 2),
                 "last_date":  max(t["date"] for t in txns),
-                "sample":     txns[-1]["description"][:45],
+                "sample":     txns[-1]["description"],
             })
 
     return sorted(recurring, key=lambda x: -x["avg_amount"])
@@ -125,8 +126,9 @@ def summarise_subscriptions(months=3):
     Known vs unrecognised recurring charges over the last `months`.
 
     Reads finance_tracker.EVERYDAY_CSV at call time. Returns available=False
-    when that file is missing. Dates are ISO strings. Merchant text can still
-    contain an account number; the agent API redacts those before responding.
+    when that file is missing. Dates are ISO strings. `sample` is the full
+    bank description. The agent API redacts sensitive text in it, then
+    shortens it.
     """
     from finance_tracker import EVERYDAY_CSV, parse_stgeorge_csv
 
@@ -215,7 +217,7 @@ def run_audit():
         print(f"\n❓  UNRECOGNISED RECURRING CHARGES ({len(unknown)}) — review these:\n")
         for r in unknown:
             print(f"  ? {r['merchant']:<25} ~${r['avg_amount']:.2f}/month")
-            print(f"    Seen {r['count']}x | Example: {r['sample']}")
+            print(f"    Seen {r['count']}x | Example: {r['sample'][:45]}")
             print(f"    Last charged: {r['last_date']}")
             print()
 
