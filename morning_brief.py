@@ -142,13 +142,6 @@ try:
 except Exception:
     FOLLOWUPS_AVAILABLE = False
 
-try:
-    from jarvis_calendar import sync_term_deadlines_to_calendar, CALENDAR_DEADLINE_SYNC
-    # Feature gated off: UNSW ICS already syncs assessment dates.
-    CALENDAR_SYNC_AVAILABLE = bool(CALENDAR_DEADLINE_SYNC)
-except Exception:
-    CALENDAR_SYNC_AVAILABLE = False
-
 # ── Course schedule — this week's topics from course outlines (optional) ──────
 try:
     import course_schedule
@@ -217,39 +210,26 @@ def get_google_credentials():
       falls back to the token's existing scopes so cron never opens a browser.
       Re-run --setup to grant new scopes.
     """
-    creds = None
+    from google_auth import load_credentials
 
     if TOKEN_FILE.exists():
-        try:
-            creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
-        except Exception:
-            creds = Credentials.from_authorized_user_file(TOKEN_FILE)
+        creds = load_credentials(TOKEN_FILE, SCOPES)
+        if creds.valid:
+            return creds
 
-    # If no valid credentials, refresh or kick off the OAuth flow
-    if not creds or not creds.valid:
-        if creds and creds.refresh_token:
-            try:
-                creds.refresh(Request())
-            except Exception:
-                # Likely new scopes not yet granted — use whatever the token has
-                creds = Credentials.from_authorized_user_file(TOKEN_FILE)
-                if creds.expired and creds.refresh_token:
-                    creds.refresh(Request())
-        else:
-            # First time — open browser for login
-            if not CREDS_FILE.exists():
-                print("\n❌  credentials.json not found.")
-                print("    Follow SETUP_GUIDE.md to download it from Google Cloud Console.\n")
-                sys.exit(1)
-            flow = InstalledAppFlow.from_client_secrets_file(CREDS_FILE, SCOPES)
-            creds = flow.run_local_server(port=0)
+    # No token or no refresh token — first-time browser login
+    if not CREDS_FILE.exists():
+        print("\n❌  credentials.json not found.")
+        print("    Follow SETUP_GUIDE.md to download it from Google Cloud Console.\n")
+        sys.exit(1)
+    flow = InstalledAppFlow.from_client_secrets_file(CREDS_FILE, SCOPES)
+    creds = flow.run_local_server(port=0)
 
-        # Save the token so we don't need to log in again (atomic write —
-        # other cron jobs read this same file concurrently)
-        tmp_file = TOKEN_FILE.parent / (TOKEN_FILE.name + ".tmp")
-        tmp_file.write_text(creds.to_json())
-        tmp_file.replace(TOKEN_FILE)
-        print("✅  Google authentication saved.")
+    # Atomic write — other cron jobs read this same file concurrently
+    tmp_file = TOKEN_FILE.parent / (TOKEN_FILE.name + ".tmp")
+    tmp_file.write_text(creds.to_json())
+    tmp_file.replace(TOKEN_FILE)
+    print("✅  Google authentication saved.")
 
     return creds
 
@@ -992,19 +972,6 @@ def run_brief():
                 print(f"✉️   Mentor draft already waiting: {info.get('subject')}")
         except Exception as e:
             print(f"⚠️   Mentor follow-up draft skipped: {e}")
-
-    # Calendar deadline sync gated by CALENDAR_DEADLINE_SYNC (default False —
-    # UNSW ICS already covers assessment dates). Fail-soft no-op when disabled.
-    if CALENDAR_SYNC_AVAILABLE:
-        try:
-            sync_result = sync_term_deadlines_to_calendar(force=False)
-            if sync_result.get("skipped"):
-                print(f"📅  Calendar deadline sync: {sync_result['skipped']}")
-            else:
-                print(f"📅  Calendar deadlines synced: {sync_result.get('synced', 0)} "
-                      f"(removed {sync_result.get('removed', 0)})")
-        except Exception as e:
-            print(f"⚠️   Calendar deadline sync skipped: {e}")
 
     # Build prompt and call Claude
     print("🧠  Generating brief with Claude...")

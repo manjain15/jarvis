@@ -120,12 +120,8 @@ Never write outside `/Users/manavjain/jarvis/`.
   `term_context.json` and `gmail.compose` scope (`python morning_brief.py --setup`
   if drafts 403). Manual: `python followups.py --draft` or Telegram `/draftmentor`.
 
-- **Calendar deadline sync** (`jarvis_calendar.sync_term_deadlines_to_calendar`):
-  **DISABLED** (`CALENDAR_DEADLINE_SYNC = False`) — UNSW ICS already syncs
-  assessment dates into Google Calendar, so Jarvis no longer creates duplicate
-  `[Jarvis]` all-day events. Helpers remain gated off; morning_brief /
-  term_updates / term_context hooks no-op. Re-enable by setting the constant
-  True, then `python jarvis_calendar.py --sync-deadlines`.
+- **Calendar deadline sync**: removed — UNSW ICS already syncs assessment dates
+  into Google Calendar, so Jarvis does not create `[Jarvis]` events.
 
 ## Git
 

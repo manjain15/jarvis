@@ -10,8 +10,6 @@ Tracks:
   - Internships: pipeline status, pending actions, stale applications
   - Mentor: last contact, awaiting response, follow-up nudges
     (optional mentor.email enables auto Gmail drafts via followups.py)
-  - Optional top-level "deadlines": [{name, due, kind?}] for fee/census dates
-    (also term.census_date / term.fee_due / term.fee_deadline if set)
   - Extracurriculars / portfolio: active projects, goals
   - US Exchange: savings progress reminder
 
@@ -239,12 +237,6 @@ def start_new_term(name: str, start_date: str, subjects: list = None):
 
     mutate_context(_mutate)
     print(f"✅ Started new term: {name}")
-    try:
-        from jarvis_calendar import sync_term_deadlines_to_calendar, CALENDAR_DEADLINE_SYNC
-        if CALENDAR_DEADLINE_SYNC:
-            sync_term_deadlines_to_calendar(force=True)
-    except Exception:
-        pass
 
 
 def add_subject(code: str, name: str, assessments: list = None):
@@ -473,12 +465,6 @@ def mark_assessment_done(subject_code: str, assessment_name: str):
     mutate_context(_mutate)
     if matched:
         print(f"✅ Marked {subject_code} — {matched['name']} as submitted")
-        try:
-            from jarvis_calendar import sync_term_deadlines_to_calendar, CALENDAR_DEADLINE_SYNC
-            if CALENDAR_DEADLINE_SYNC:
-                sync_term_deadlines_to_calendar(force=True)
-        except Exception:
-            pass
     else:
         print("❌ Assessment not found")
 

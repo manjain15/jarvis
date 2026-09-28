@@ -207,18 +207,6 @@ Return ONLY the JSON array. No commentary, no code fences."""
         return []
 
 
-
-def _sync_calendar_after_assessment():
-    """Best-effort calendar upsert after assessment add/update/submit. Never raises.
-    No-op while CALENDAR_DEADLINE_SYNC is False (UNSW ICS covers assessment dates)."""
-    try:
-        from jarvis_calendar import sync_term_deadlines_to_calendar, CALENDAR_DEADLINE_SYNC
-        if not CALENDAR_DEADLINE_SYNC:
-            return
-        sync_term_deadlines_to_calendar(force=True)
-    except Exception:
-        pass
-
 # ── Apply an approved proposal to term_context.json ──────────────────────────
 
 def apply_update(proposal):
@@ -247,7 +235,6 @@ def apply_update(proposal):
 
         if action == "assessment_submitted":
             term_context.mark_assessment_done(params["subject_code"], params["assessment_name"])
-            _sync_calendar_after_assessment()
             return True
 
         if action == "assessment_due_set":
@@ -276,7 +263,6 @@ def apply_update(proposal):
 
             term_context.mutate_context(_mutate)
             if matched:
-                _sync_calendar_after_assessment()
                 return True
             # Subject itself isn't tracked for the current term yet — create it
             # (name TBD) so the assessment has somewhere to live, rather than
@@ -287,7 +273,6 @@ def apply_update(proposal):
                 "weight": params.get("weight"),
                 "status": "pending",
             }])
-            _sync_calendar_after_assessment()
             return True
 
         if action == "workout_schedule_change":
