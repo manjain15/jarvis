@@ -156,6 +156,13 @@ That's under $1/month to have a personalised AI briefing every day.
 
 ---
 
+## Agent API
+
+An external assistant can query Jarvis over HTTP. Setup, auth, and curl
+examples are in `docs/API.md`. The server is `agent_api.py` on
+`127.0.0.1:5557` and requires `JARVIS_API_TOKEN`. Put it behind HTTPS
+(Cloudflare Tunnel, Tailscale, or a reverse proxy). Do not open the raw port.
+
 ## Updating your profile
 
 Your brief gets smarter the more you maintain `profile.md`.

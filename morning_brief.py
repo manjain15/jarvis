@@ -981,6 +981,13 @@ def run_brief():
     brief  = generate_brief(prompt)
     print("✅  Brief generated")
 
+    try:
+        from agent_api import save_latest_brief
+        save_latest_brief(brief, kind="morning", label=today_str)
+        print("💾  Brief saved for the agent API")
+    except Exception as e:
+        print(f"⚠️   Could not save brief for the agent API: {e}")
+
     # Send email
     print("📤  Sending brief...")
     send_email(creds, brief, today_str)

@@ -7,6 +7,8 @@
 # there is a second copy if the VPS is ever lost.
 #
 # Transport: the same key-based SSH path used for the repo sync (no Tailscale).
+# The SSH target is JARVIS_VPS_USER + JARVIS_VPS_HOST from the environment or
+# the gitignored repo .env — never hardcoded here.
 # NOTE: no --delete — this is a backup, so files removed on the VPS are kept
 # locally rather than mirrored away. Re-running overwrites with the VPS version.
 #
@@ -16,13 +18,14 @@
 
 set -euo pipefail
 
-VPS="jarvis@34.63.231.218"
 SSH_KEY="$HOME/.ssh/id_ed25519"
 
 # Resolve data/ relative to the repo root (this script lives in deploy/).
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=deploy/load-vps-target.sh
+source "$REPO_ROOT/deploy/load-vps-target.sh"
 LOCAL_DIR="$REPO_ROOT/data/"
-REMOTE_DIR="jarvis/data/"   # relative to the jarvis user's home on the VPS
+REMOTE_DIR="jarvis/data/"   # relative to the SSH user's home on the VPS
 
 DRY_RUN=""
 if [[ "${1:-}" == "--dry-run" ]]; then
