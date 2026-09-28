@@ -294,6 +294,41 @@ def test_own_account_transfers_are_not_spending(tmp_path, monkeypatch):
     assert "revolut" not in bundle.get_data(as_text=True).lower()
 
 
+def test_refund_reduces_spending_for_the_week(tmp_path, monkeypatch):
+    """First Knockout $120 is refunded next morning; the repurchase still counts."""
+    today = _today()
+    yesterday = today - datetime.timedelta(days=1)
+    everyday, _savings = _patch_files(monkeypatch, tmp_path)
+
+    def row(day, description, debit, credit=""):
+        return [_dmy(day), description, debit, credit, "1000.00"]
+
+    _write_csv(everyday, [
+        row(yesterday, "Osko Withdrawal 22Sep18:35 Knockout R Jaiswal", "120.00"),
+        row(today, "Sct Deposit 23Sep09:11 Rishi Jaiswal", "", "120.00"),
+        row(today, "Osko Withdrawal 23Sep10:30 Knockout R Jaiswal", "120.00"),
+        row(today, "Osko Withdrawal 24Sep Doomsday Tix Abhishek Goyal", "25.00"),
+        row(today, "Visa Purchase 24Sep Playstation London", "14.95"),
+        row(today, "Visa Purchase 24Sep Paypal *Guzmanygome", "3.60"),
+        row(yesterday, "Visa Purchase 22Sep Tfnsw Opal", "6.90"),
+        row(today, "Visa Purchase 23Sep Tfnsw Opal", "4.80"),
+        row(today, "Osko Withdrawal 25Sep Change For Hot Wheels W Tynan", "10.00"),
+        row(today, "Osko Deposit 24Sep Pokemon Gemma Johnston", "", "390.00"),
+        row(today, "Osko Deposit 24Sep Bank Carlos Santos", "", "135.00"),
+        row(today, "Osko Deposit 25Sep Bank Carlos Santos", "", "54.00"),
+        row(today, "Sct Deposit 26Sep Advance", "", "500.00"),
+        row(today, "Osko Deposit 27Sep Nilesh Banga", "", "17000.00"),
+    ])
+    res = _client().get("/finance/spending", headers=AUTH)
+    assert res.status_code == 200
+    body = res.get_json()
+    assert body["total_spend"] == 185.25
+    assert body["by_category"]["Entertainment"] == 134.95
+    assert body["by_category"]["Transport"] == 11.70
+    assert body["by_category"]["Other"] == 38.60
+    assert [item["amount"] for item in body["flagged"]] == [120.0]
+
+
 def test_redact_leaves_dates_and_amounts():
     payload = {"when": "2026-09-28", "amount": 22.5, "note": f"paid {ACCOUNT}"}
     cleaned = agent_api.redact_account_numbers(payload)

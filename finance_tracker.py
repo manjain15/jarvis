@@ -65,7 +65,7 @@ TIMEZONE = pytz.timezone(config.TIMEZONE)
 # Goals themselves live in term_context.json (single source of truth, editable
 # via proposals) instead of being hardcoded here.
 try:
-    from term_context import get_finance_goals, get_own_account_rules
+    from term_context import get_finance_goals, get_own_account_rules, get_refund_window_days
 except Exception:
     def get_finance_goals():
         return {
@@ -83,6 +83,10 @@ except Exception:
             "card_patterns": ["revolut**5228", "revolut"],
             "card_rails": ["visa purchase", "eftpos", "top-up", "topup"],
         }
+
+    def get_refund_window_days():
+        """Fallback when term_context cannot be imported."""
+        return 14
 
 
 # ── Category rules ────────────────────────────────────────────────────────────
@@ -377,6 +381,224 @@ def get_latest_balance(filepath):
     return transactions[0]["balance"]
 
 
+# ── Refunds ───────────────────────────────────────────────────────────────────
+# A credit reduces a counted debit only when every rule below holds. Ordinary
+# income (salary, reselling payouts, friend deposits, own-account transfers)
+# fails these rules and stays out of the spending total.
+#
+# 1. The credit is not an own-account transfer, a friend split, or an inbound
+#    payment marked advance / pokemon / bank (customer payouts, not refunds).
+# 2. The credit is on or after the debit, and no later than refund_window_days
+#    (default 14, spending.refund_window_days in term_context.json). Clock
+#    times embedded in the description (22Sep18:35) order same-day rows.
+#    Untimed rows sit at 12:00.
+# 3. The credit is the same amount as the debit, or smaller (a partial refund).
+#    A larger credit never offsets a smaller debit.
+# 4. Identity: shared surname plus a given name or initial ("R Jaiswal" /
+#    "Rishi Jaiswal"). Surname alone does not match. Merchant card refunds
+#    (description contains refund, reversal, chargeback, or "visa credit")
+#    match when they share a merchant token such as "woolworths".
+# 5. Each debit takes at most one credit, and each credit pays one debit.
+#    Exact amount wins over a partial; otherwise the latest debit still
+#    before the credit wins. A later repurchase is left intact.
+
+_REFUND_HINTS = ("refund", "reversal", "chargeback", "visa credit", "eftpos credit")
+_NOT_REFUND_CREDIT = ("advance", "pokemon", "bank")
+_NOISE_TOKENS = {
+    "osko", "sct", "visa", "eftpos", "withdrawal", "deposit", "purchase",
+    "internet", "transfer", "sent", "from", "the", "pty", "ltd", "payment",
+    "direct", "credit", "refund", "reversal", "chargeback", "to", "for",
+}
+_PLACE_TOKENS = {
+    "sydney", "melbourne", "australia", "nsw", "london", "online",
+    "brisbane", "perth", "adelaide", "hobart", "canberra",
+}
+
+
+def _cents(amount):
+    """Integer cents, so 14.95 and a matching refund compare equal."""
+    return int(round(float(amount) * 100))
+
+
+def _event_dt(txn):
+    """Datetime used to order a debit and its refund.
+
+    Uses a HH:MM glued to the description date (23Sep09:11) when present.
+    Rows with no clock time are treated as 12:00 on the CSV date.
+    """
+    desc = _normalise_desc(txn.get("description", ""))
+    match = re.search(r"\d{2}[a-z]{3}(\d{2}):(\d{2})", desc)
+    if not match:
+        match = re.search(r"\b(\d{2}):(\d{2})\b", desc)
+    if match:
+        hour, minute = int(match.group(1)), int(match.group(2))
+        if 0 <= hour <= 23 and 0 <= minute <= 59:
+            return datetime.datetime.combine(txn["date"], datetime.time(hour, minute))
+    return datetime.datetime.combine(txn["date"], datetime.time(12, 0))
+
+
+def _payee_tokens(description):
+    """Alphabetic tokens left after the bank rail, date, and filler words."""
+    desc = _normalise_desc(description)
+    desc = re.sub(r"\d{2}[a-z]{3}(?:\d{2}:\d{2})?", " ", desc)
+    desc = re.sub(r"\b\d{2}:\d{2}\b", " ", desc)
+    desc = re.sub(r"[^a-z]+", " ", desc)
+    return [token for token in desc.split() if token not in _NOISE_TOKENS]
+
+
+def _surname_and_given(tokens):
+    """Last word of 3+ letters is the surname. Earlier tokens are the given name."""
+    long_indexes = [i for i, token in enumerate(tokens) if len(token) >= 3]
+    if not long_indexes:
+        return "", list(tokens)
+    index = long_indexes[-1]
+    return tokens[index], tokens[:index] + tokens[index + 1:]
+
+
+def _given_names_corroborate(left_given, right_given):
+    """True when a full given name or an initial lines up across the two sides."""
+    left_words = {token for token in left_given if len(token) >= 3}
+    right_words = {token for token in right_given if len(token) >= 3}
+    if left_words & right_words:
+        return True
+    left_initials = {token for token in left_given if len(token) == 1}
+    right_initials = {token for token in right_given if len(token) == 1}
+    if any(word.startswith(initial) for initial in left_initials for word in right_words):
+        return True
+    if any(word.startswith(initial) for initial in right_initials for word in left_words):
+        return True
+    return bool(left_initials) and left_initials == right_initials
+
+
+def _person_refund_match(debit_desc, credit_desc):
+    """Surname plus given name or initial. 'R Jaiswal' matches 'Rishi Jaiswal'."""
+    debit_surname, debit_given = _surname_and_given(_payee_tokens(debit_desc))
+    credit_surname, credit_given = _surname_and_given(_payee_tokens(credit_desc))
+    if not debit_surname or debit_surname != credit_surname:
+        return False
+    return _given_names_corroborate(debit_given, credit_given)
+
+
+def _merchant_refund_match(debit_desc, credit_desc):
+    """Card refund / reversal that names the same merchant as the debit."""
+    credit = _normalise_desc(credit_desc)
+    if not any(hint in credit for hint in _REFUND_HINTS):
+        return False
+    debit_tokens = {
+        token for token in _payee_tokens(debit_desc)
+        if len(token) >= 4 and token not in _PLACE_TOKENS
+    }
+    credit_tokens = {
+        token for token in _payee_tokens(credit_desc)
+        if len(token) >= 4 and token not in _PLACE_TOKENS
+    }
+    return bool(debit_tokens & credit_tokens)
+
+
+def _is_internal_credit(description):
+    """True for money arriving from the owner's own accounts."""
+    desc = _normalise_desc(description)
+    if "internet deposit" in desc or "from 0000" in desc or "sent from revolut" in desc:
+        return True
+    names = get_own_account_rules().get("owner_names") or []
+    if names and any(name in desc for name in names) and "deposit" in desc:
+        return True
+    return _is_own_card_topup(desc, get_own_account_rules())
+
+
+def _credit_can_be_refund(description):
+    """False for income and transfers that must not reduce personal spending."""
+    if _is_internal_credit(description):
+        return False
+    if is_friend_split(description):
+        return False
+    desc = _normalise_desc(description)
+    return not any(re.search(rf"\b{re.escape(word)}\b", desc) for word in _NOT_REFUND_CREDIT)
+
+
+def _descriptions_match_refund(debit_desc, credit_desc):
+    """Person-name refund, or a merchant card refund of the same shop."""
+    if _merchant_refund_match(debit_desc, credit_desc):
+        return True
+    return _person_refund_match(debit_desc, credit_desc)
+
+
+def _refund_offsets(debits, credits, window_days):
+    """Map a debit index to the cents-as-dollars a single credit offsets.
+
+    Credits are applied oldest first. Each debit and each credit is used
+    once. See the refund rules at the top of this section.
+    """
+    offsets = {}
+    used = set()
+    eligible = [
+        credit for credit in credits
+        if credit.get("credit", 0) > 0
+        and _credit_can_be_refund(credit.get("description", ""))
+    ]
+    eligible.sort(key=lambda credit: (_event_dt(credit), credit.get("credit", 0)))
+    for credit in eligible:
+        credit_cents = _cents(credit["credit"])
+        if credit_cents <= 0:
+            continue
+        credit_dt = _event_dt(credit)
+        best = None
+        for index, debit in enumerate(debits):
+            if index in used:
+                continue
+            debit_cents = _cents(debit.get("debit", 0))
+            if credit_cents > debit_cents or debit_cents <= 0:
+                continue
+            debit_dt = _event_dt(debit)
+            if credit_dt < debit_dt:
+                continue
+            if (credit_dt.date() - debit_dt.date()).days > window_days:
+                continue
+            if not _descriptions_match_refund(
+                debit.get("description", ""), credit.get("description", ""),
+            ):
+                continue
+            rank = (0 if credit_cents == debit_cents else 1, -debit_dt.timestamp(), index)
+            if best is None or rank < best[0]:
+                best = (rank, index)
+        if best is None:
+            continue
+        index = best[1]
+        used.add(index)
+        offsets[index] = credit_cents / 100.0
+    return offsets
+
+
+def _net_spending_debits(transactions, start, end):
+    """Counted debits in the inclusive range, after refund credits.
+
+    Own-account transfers are dropped first. A fully refunded debit is
+    omitted. A partial refund keeps the category and the remaining amount.
+    The original transaction dicts are not mutated.
+    """
+    debits = [
+        txn for txn in transactions
+        if start <= txn["date"] <= end
+        and txn.get("debit", 0) > 0
+        and not _is_internal_spend(txn.get("description", ""))
+    ]
+    offsets = _refund_offsets(debits, transactions, get_refund_window_days())
+    netted = []
+    for index, txn in enumerate(debits):
+        refunded = offsets.get(index, 0.0)
+        remaining = round(txn["debit"] - refunded, 2)
+        if remaining <= 0:
+            continue
+        if refunded:
+            row = dict(txn)
+            row["debit"] = remaining
+            row["refunded"] = round(refunded, 2)
+            netted.append(row)
+        else:
+            netted.append(txn)
+    return netted
+
+
 # ── Spending analysis ─────────────────────────────────────────────────────────
 
 def analyse_spending(transactions, days=7):
@@ -385,18 +607,14 @@ def analyse_spending(transactions, days=7):
     Returns a dict with category totals, big transactions, and overall total.
 
     Own-account transfers (see _is_internal_spend) are left out of the totals,
-    the category breakdown, and the flagged debits. That is the same filter
-    summarise_spending uses for GET /finance.
+    the category breakdown, and the flagged debits. Refund credits that match
+    a counted debit (see the refund rules above) reduce that debit's category
+    and the total. That is the same filter summarise_spending uses for GET /finance.
     """
     today    = datetime.datetime.now(TIMEZONE).date()
     cutoff   = today - datetime.timedelta(days=days)
 
-    recent = [
-        t for t in transactions
-        if t["date"] >= cutoff
-        and t["debit"] > 0
-        and not _is_internal_spend(t.get("description", ""))
-    ]
+    recent = _net_spending_debits(transactions, cutoff, datetime.date.max)
 
     # Category totals
     category_totals = {}
@@ -404,7 +622,7 @@ def analyse_spending(transactions, days=7):
         cat = t["category"]
         category_totals[cat] = category_totals.get(cat, 0) + t["debit"]
 
-    # Big transactions ($80+, own-account transfers already removed)
+    # Big transactions ($80+ after refunds, own-account transfers already removed)
     big_transactions = [t for t in recent if t["debit"] >= 80]
 
     total_spend = sum(t["debit"] for t in recent)
@@ -713,16 +931,13 @@ def summarise_spending(transactions, start, end, weekly_budget):
 
     Drops the same own-account transfers analyse_spending leaves out
     (internet withdrawals, transfers, Osko/Sct withdrawals to an owner name,
-    Revolut card top-ups) so the category totals add up to total_spend.
-    Descriptions are included only on large debits; callers that send this
-    to an external agent must redact account numbers first.
+    Revolut card top-ups). A refund credit that matches a counted debit
+    reduces that category and total_spend, so the category totals still add
+    up to total_spend. Descriptions are included only on large debits that
+    remain after refunds; callers that send this to an external agent must
+    redact account numbers first.
     """
-    recent = [
-        t for t in transactions
-        if start <= t["date"] <= end
-        and t.get("debit", 0) > 0
-        and not _is_internal_spend(t.get("description", ""))
-    ]
+    recent = _net_spending_debits(transactions, start, end)
 
     by_category = {}
     for t in recent:
