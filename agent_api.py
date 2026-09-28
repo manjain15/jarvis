@@ -28,6 +28,9 @@ COST:
   Mentor and internship writes do not call Anthropic. They update
   term_context.json through term_context.mutate_context and append
   data/agent_api_audit.jsonl.
+  GET /finance* is read-only. It reads local CSVs and term_context goals.
+  Reselling inventory also reads the Google Sheet once per call. No Anthropic.
+  A weekly Money check should call GET /finance, not poll it.
 
 SETUP:
   Add JARVIS_API_TOKEN to .env (long random string).
@@ -64,6 +67,10 @@ DEFAULT_PORT = 5557
 
 _TAG_RE = re.compile(r"<[^>]+>")
 _BREAK_RE = re.compile(r"<br\s*/?>|</p>|</h[1-6]>|</li>|</div>|</tr>", re.I)
+# St. George descriptions embed the owner's own account numbers as long digit
+# runs. 8+ digits also covers card PANs. Dates and dollar amounts are shorter
+# or contain separators, so they are left alone.
+_ACCOUNT_DIGITS = re.compile(r"\d{8,}")
 
 
 def api_token():
@@ -491,6 +498,279 @@ def apply_internship_add(body):
     }
 
 
+def redact_account_numbers(value):
+    """
+    Replace 8+ digit runs anywhere in a JSON-like structure.
+
+    Finance descriptions quote internal transfer account numbers. Totals,
+    dates, and category names do not contain a run that long.
+    """
+    if isinstance(value, str):
+        return _ACCOUNT_DIGITS.sub("[redacted]", value)
+    if isinstance(value, list):
+        return [redact_account_numbers(item) for item in value]
+    if isinstance(value, dict):
+        return {key: redact_account_numbers(item) for key, item in value.items()}
+    return value
+
+
+def _parse_iso_date(raw, name):
+    """Parse YYYY-MM-DD, or return None when the query param is absent."""
+    if raw is None or str(raw).strip() == "":
+        return None
+    try:
+        return datetime.date.fromisoformat(str(raw).strip())
+    except ValueError:
+        raise ValueError(f"{name} must be YYYY-MM-DD")
+
+
+def spending_window(start_raw, end_raw, today=None):
+    """
+    Inclusive spending window. Defaults to the last 7 days ending today.
+
+    start and end must be sent together. The window cannot run past today
+    or exceed 366 days.
+    """
+    today = today or datetime.datetime.now(TIMEZONE).date()
+    start = _parse_iso_date(start_raw, "start")
+    end = _parse_iso_date(end_raw, "end")
+    if (start is None) != (end is None):
+        raise ValueError("start and end must be provided together")
+    if start is None:
+        end = today
+        start = today - datetime.timedelta(days=6)
+    if end < start:
+        raise ValueError("end must be on or after start")
+    if end > today:
+        raise ValueError("end must not be in the future")
+    if (end - start).days + 1 > 366:
+        raise ValueError("date range must be 366 days or fewer")
+    return start, end
+
+
+def get_spending_payload(start, end):
+    """
+    Everyday-account spend for an inclusive range, versus the weekly budget.
+
+    Category totals use finance_tracker.summarise_spending. Live Back Tap
+    totals are included when the window reaches today. No raw descriptions
+    leave this function without account-number redaction.
+    """
+    import finance_tracker
+
+    goals = finance_tracker.get_finance_goals()
+    weekly_budget = goals.get("weekly_budget", 75.0)
+    if not finance_tracker.EVERYDAY_CSV.exists():
+        return {
+            "available": False,
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+            "weekly_budget": weekly_budget,
+            "by_category": {},
+            "total_spend": 0.0,
+            "reason": "no everyday account export",
+        }
+
+    transactions = finance_tracker.parse_stgeorge_csv(finance_tracker.EVERYDAY_CSV)
+    summary = finance_tracker.summarise_spending(transactions, start, end, weekly_budget)
+    summary["available"] = True
+
+    today = datetime.datetime.now(TIMEZONE).date()
+    if end >= today:
+        try:
+            from live_spend import get_live_summary
+            days = max((end - start).days + 1, 1)
+            live = get_live_summary(days=days, transactions=transactions)
+        except Exception as e:
+            print(f"⚠️  /finance/spending live spend failed: {e}")
+            live = {"available": False}
+        if live.get("available"):
+            summary["live"] = {
+                "total": live["total"],
+                "count": live["count"],
+                "by_category": {
+                    cat: round(amount, 2) for cat, amount in live.get("by_category", {}).items()
+                },
+                "matched": live.get("matched"),
+                "unmatched_count": len(live.get("unmatched") or []),
+            }
+    return redact_account_numbers(summary)
+
+
+def get_savings_payload():
+    """
+    Savings balance against exchange_target (term_context us_exchange goals).
+
+    The goal figures are returned even when the savings CSV is missing.
+    Account numbers are not part of this payload.
+    """
+    import finance_tracker
+
+    goals = finance_tracker.get_finance_goals()
+    savings = finance_tracker.analyse_savings()
+    projected = savings["projected_date"]
+    deadline = savings["deadline"]
+    if isinstance(projected, datetime.datetime):
+        projected = projected.date()
+    if isinstance(deadline, datetime.datetime):
+        deadline = deadline.date()
+    return redact_account_numbers({
+        "available": finance_tracker.SAVINGS1_CSV.exists(),
+        "exchange_target": {
+            "savings_goal": goals["savings_goal"],
+            "savings_deadline": goals["savings_deadline"],
+            "weekly_budget": goals["weekly_budget"],
+            "monthly_budget": goals["monthly_budget"],
+            "monthly_income": goals["monthly_income"],
+        },
+        "balance": round(savings["total"], 2),
+        "remaining": round(savings["remaining"], 2),
+        "pct": round(savings["pct"], 1),
+        "on_track": bool(savings["on_track"]),
+        "projected_date": projected.isoformat(),
+        "days_to_deadline": savings["days_to_deadline"],
+        "monthly_savings": round(savings["monthly_savings"], 2),
+    })
+
+
+def get_subscriptions_payload(months):
+    """Detected recurring charges from the everyday CSV, known vs needs review."""
+    from subscription_audit import summarise_subscriptions
+    return redact_account_numbers(summarise_subscriptions(months=months))
+
+
+def load_reselling_inventory():
+    """
+    All-time reselling P&L from the Google Sheet, as plain numbers.
+
+    Item notes are omitted. Raises if the sheet cannot be read; callers
+    treat that as a soft failure so the cashflow summary still returns.
+    """
+    from reselling_tracker import compute_summary, load_items
+
+    summary = compute_summary(load_items())
+
+    def _flip(item):
+        if item is None:
+            return None
+        margin = item.margin_pct
+        return {
+            "name": item.name,
+            "category": item.category,
+            "net": round(item.net_profit or 0, 2),
+            "margin_pct": round(margin, 1) if margin is not None else None,
+        }
+
+    by_category = {
+        cat: {
+            "profit": round(data["profit"], 2),
+            "revenue": round(data["revenue"], 2),
+            "count": data["count"],
+        }
+        for cat, data in summary["by_category"].items()
+    }
+    worst = summary["worst_flip"]
+    if worst is summary["best_flip"]:
+        worst = None
+    return {
+        "sold_count": summary["sold_count"],
+        "stock_count": summary["stock_count"],
+        "pending_count": summary["pending_count"],
+        "total_revenue": round(summary["total_revenue"], 2),
+        "total_cogs": round(summary["total_cogs"], 2),
+        "total_fees": round(summary["total_fees"], 2),
+        "net_pl": round(summary["net_pl"], 2),
+        "avg_margin_pct": round(summary["avg_margin_pct"], 1),
+        "capital_stock": round(summary["capital_stock"], 2),
+        "capital_pending": round(summary["capital_pending"], 2),
+        "deposits_owing": round(summary["deposits_owing"], 2),
+        "by_category": by_category,
+        "best_flip": _flip(summary["best_flip"]),
+        "worst_flip": _flip(worst),
+        "stock_names": [item.name for item in summary["stock_items"][:5]],
+        "pending_names": [item.name for item in summary["pending_items"][:5]],
+    }
+
+
+def get_reselling_payload(days):
+    """
+    Reselling cashflow over `days` plus the sheet P&L when the sheet loads.
+
+    Cashflow comes from finance_tracker.analyse_reselling (Revolut CSV,
+    otherwise the investing CSV). A sheet failure does not drop the cashflow.
+    """
+    import finance_tracker
+
+    try:
+        cash = finance_tracker.analyse_reselling(days=days)
+    except Exception as e:
+        print(f"⚠️  /finance/reselling cashflow failed: {e}")
+        cash = {
+            "available": False,
+            "deployed": 0.0,
+            "returned": 0.0,
+            "net": 0.0,
+            "balance": None,
+            "txn_count": 0,
+            "days": days,
+            "source": "none",
+        }
+
+    inventory = None
+    inventory_error = None
+    try:
+        inventory = load_reselling_inventory()
+    except Exception as e:
+        print(f"⚠️  /finance/reselling sheet failed: {e}")
+        inventory_error = "reselling sheet unavailable"
+
+    return redact_account_numbers({
+        "cashflow": {
+            "available": bool(cash.get("available")),
+            "days": cash.get("days", days),
+            "source": cash.get("source", "none"),
+            "deployed": cash.get("deployed", 0.0),
+            "returned": cash.get("returned", 0.0),
+            "net": cash.get("net", 0.0),
+            "balance": cash.get("balance"),
+            "transaction_count": cash.get("txn_count", 0),
+        },
+        "inventory": inventory,
+        "inventory_error": inventory_error,
+    })
+
+
+def get_finance_payload(start, end, months, reselling_days):
+    """
+    One weekly-check payload. Each section fails on its own.
+
+    `unavailable` lists sections that raised. A missing CSV is available=false
+    inside the section and is not listed here.
+    """
+    sections = {
+        "spending": lambda: get_spending_payload(start, end),
+        "savings": get_savings_payload,
+        "subscriptions": lambda: get_subscriptions_payload(months),
+        "reselling": lambda: get_reselling_payload(reselling_days),
+    }
+    payload = {
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "subscription_months": months,
+        "reselling_days": reselling_days,
+    }
+    unavailable = []
+    for name, loader in sections.items():
+        try:
+            payload[name] = loader()
+        except Exception as e:
+            print(f"⚠️  /finance {name} failed: {e}")
+            payload[name] = {"available": False, "error": f"{name} unavailable"}
+            unavailable.append(name)
+    payload["unavailable"] = unavailable
+    return payload
+
+
 def _bounded_int(raw, default, lo, hi, name):
     """Parse a query integer, or return default. Raises ValueError when out of range."""
     if raw is None or raw == "":
@@ -633,6 +913,68 @@ def create_app(token=None):
     def add_internship():
         """Add one internship application."""
         return _commit(apply_internship_add, "internship add", success_status=201)
+
+    def _finance_dates():
+        return spending_window(request.args.get("start"), request.args.get("end"))
+
+    @app.get("/finance")
+    def finance():
+        """Weekly check: spending, savings, subscriptions, and reselling."""
+        try:
+            start, end = _finance_dates()
+            months = _bounded_int(request.args.get("months"), 3, 1, 12, "months")
+            days = _bounded_int(request.args.get("days"), 7, 1, 120, "days")
+            return jsonify(get_finance_payload(start, end, months, days))
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        except Exception as e:
+            print(f"⚠️  /finance failed: {e}")
+            return jsonify({"error": "finance failed"}), 500
+
+    @app.get("/finance/spending")
+    def finance_spending():
+        """Category totals and spend versus the weekly budget for a date range."""
+        try:
+            start, end = _finance_dates()
+            return jsonify(get_spending_payload(start, end))
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        except Exception as e:
+            print(f"⚠️  /finance/spending failed: {e}")
+            return jsonify({"error": "spending failed"}), 500
+
+    @app.get("/finance/savings")
+    def finance_savings():
+        """Savings progress against the exchange_target goal."""
+        try:
+            return jsonify(get_savings_payload())
+        except Exception as e:
+            print(f"⚠️  /finance/savings failed: {e}")
+            return jsonify({"error": "savings failed"}), 500
+
+    @app.get("/finance/subscriptions")
+    def finance_subscriptions():
+        """Recurring charges detected on the everyday account. ?months=1..12."""
+        try:
+            months = _bounded_int(request.args.get("months"), 3, 1, 12, "months")
+            return jsonify(get_subscriptions_payload(months))
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        except Exception as e:
+            print(f"⚠️  /finance/subscriptions failed: {e}")
+            return jsonify({"error": "subscriptions failed"}), 500
+
+    @app.get("/finance/reselling")
+    def finance_reselling():
+        """Reselling cashflow plus sheet P&L. ?days=1..120, default 7."""
+        try:
+            days = _bounded_int(request.args.get("days"), 7, 1, 120, "days")
+            return jsonify(get_reselling_payload(days))
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        except Exception as e:
+            print(f"⚠️  /finance/reselling failed: {e}")
+            return jsonify({"error": "reselling failed"}), 500
 
     return app
 

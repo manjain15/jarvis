@@ -120,6 +120,59 @@ def find_recurring(transactions, months=3):
     return sorted(recurring, key=lambda x: -x["avg_amount"])
 
 
+def summarise_subscriptions(months=3):
+    """
+    Known vs unrecognised recurring charges over the last `months`.
+
+    Reads finance_tracker.EVERYDAY_CSV at call time. Returns available=False
+    when that file is missing. Dates are ISO strings. Merchant text can still
+    contain an account number; the agent API redacts those before responding.
+    """
+    from finance_tracker import EVERYDAY_CSV, parse_stgeorge_csv
+
+    if not EVERYDAY_CSV.exists():
+        return {
+            "available": False,
+            "months": months,
+            "known": [],
+            "review": [],
+            "monthly_known": 0.0,
+            "monthly_review": 0.0,
+            "monthly_total": 0.0,
+        }
+
+    recurring = find_recurring(parse_stgeorge_csv(EVERYDAY_CSV), months=months)
+    known = []
+    review = []
+    for row in recurring:
+        item = {
+            "merchant": row["merchant"],
+            "avg_amount": row["avg_amount"],
+            "count": row["count"],
+            "months": row["months"],
+            "last_date": row["last_date"].isoformat(),
+            "sample": row["sample"],
+        }
+        label = next((v[0] for k, v in KNOWN_SUBS.items() if k in row["merchant"]), None)
+        if label:
+            item["label"] = label
+            known.append(item)
+        else:
+            review.append(item)
+
+    monthly_known = round(sum(r["avg_amount"] for r in known), 2)
+    monthly_review = round(sum(r["avg_amount"] for r in review), 2)
+    return {
+        "available": True,
+        "months": months,
+        "known": known,
+        "review": review,
+        "monthly_known": monthly_known,
+        "monthly_review": monthly_review,
+        "monthly_total": round(monthly_known + monthly_review, 2),
+    }
+
+
 def run_audit():
     if not EVERYDAY_CSV.exists():
         print("❌  No everyday.csv found. Export 90 days from St. George first.")

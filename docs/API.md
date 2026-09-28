@@ -14,6 +14,11 @@ The agent API reuses existing code:
 - `GET /memory/search` uses Mem0 (`jarvis_mem0.search_memories`).
 - `GET /brief` returns the last morning brief or Sunday weekly review saved by
   those jobs.
+- `GET /finance` and the `/finance/*` routes read the existing finance code:
+  St. George spending (`finance_tracker`), savings against `exchange_target`
+  (`term_context` / `us_exchange`), recurring charges (`subscription_audit`),
+  and reselling cashflow plus the sheet P&L (`analyse_reselling`,
+  `reselling_tracker`). They do not return raw account numbers.
 - `POST /spend` calls `live_spend.log_spend` (the Back Tap path is unchanged).
 - `PATCH /mentor`, `PATCH /internships`, and `POST /internships` write
   `term_context.json` through `term_context.mutate_context`, the same locked
@@ -67,8 +72,9 @@ Deploys restart the unit only after it is enabled. Confirm:
 curl -sS -H "Authorization: Bearer $JARVIS_API_TOKEN" http://127.0.0.1:5557/health
 ```
 
-Optional: after the service is enabled, add `jarvis-agent-api` to `ALWAYS_ON`
-in `watchdog.py` so a dead process raises a Telegram alert.
+`jarvis-agent-api` is in `ALWAYS_ON` in `watchdog.py` (and in Telegram `/status`).
+A dead process raises a Telegram alert on the next watchdog run. That check
+starts once this code is on the VPS; the unit itself is already enabled.
 
 ## Endpoints
 
@@ -144,6 +150,89 @@ curl -sS -H "Authorization: Bearer $JARVIS_API_TOKEN" \
 
 `kind` is `morning` or `weekly`. `html` is the body that was emailed. `text`
 is the same content with tags removed.
+
+### Finance (read-only)
+
+For the weekly Money check. No Anthropic call. `GET /finance` returns every
+section below in one response; a section that throws is
+`{"available": false, "error": "..."}` and its name is listed in `unavailable`.
+A missing CSV is `available: false` inside that section and is not an error.
+
+Account numbers (runs of 8 or more digits in a bank description) are replaced
+with `[redacted]` before the response is sent. Dollar amounts, dates, and
+category names are unchanged.
+
+`start` and `end` are optional `YYYY-MM-DD` dates, inclusive, Australia/Sydney.
+Send both or neither. The default window is the last 7 days ending today.
+`end` cannot be in the future, and the window cannot be longer than 366 days.
+
+```
+curl -sS -H "Authorization: Bearer $JARVIS_API_TOKEN" \
+  "https://<your-host>/finance?start=2026-09-22&end=2026-09-28"
+```
+
+#### Spending
+
+```
+curl -sS -H "Authorization: Bearer $JARVIS_API_TOKEN" \
+  "https://<your-host>/finance/spending?start=2026-09-22&end=2026-09-28"
+```
+
+`by_category` is everyday-account debit totals (internal transfers and internet
+withdrawals excluded, same idea as the morning-brief total). `weekly_budget`
+is the `exchange_target` weekly budget ($75 unless `term_context.json` says
+otherwise). `budget_for_range` prorates that budget by `days / 7`.
+`weekly_equivalent` is spend scaled to a 7-day week. `over_budget` compares
+`total_spend` with `budget_for_range`.
+
+`flagged` lists up to four debits of $80 or more (`date`, `amount`,
+`category`, redacted `description`). When the window includes today, `live`
+is the Back Tap total for that span (category totals and an unmatched count,
+not the raw notes).
+
+#### Savings
+
+```
+curl -sS -H "Authorization: Bearer $JARVIS_API_TOKEN" \
+  https://<your-host>/finance/savings
+```
+
+`exchange_target` is the goal block (`savings_goal`, `savings_deadline`,
+`weekly_budget`, `monthly_budget`, `monthly_income`). `balance` is the latest
+savings-CSV balance. `remaining`, `pct`, `on_track`, `projected_date`, and
+`monthly_savings` match `finance_tracker.analyse_savings`. The goal is still
+returned when the savings CSV is missing (`available: false`, `balance: 0`).
+
+#### Subscriptions
+
+`months` is optional, 1–12, default 3.
+
+```
+curl -sS -H "Authorization: Bearer $JARVIS_API_TOKEN" \
+  "https://<your-host>/finance/subscriptions?months=3"
+```
+
+`known` is recurring merchants already listed in `subscription_audit.KNOWN_SUBS`.
+`review` is everything else that showed up in at least two months. Each row has
+`merchant`, `avg_amount`, `count`, `months`, `last_date`, and a short `sample`.
+`monthly_known`, `monthly_review`, and `monthly_total` are the sums of those
+averages.
+
+#### Reselling
+
+`days` is optional, 1–120, default 7 (the weekly cashflow window).
+
+```
+curl -sS -H "Authorization: Bearer $JARVIS_API_TOKEN" \
+  "https://<your-host>/finance/reselling?days=7"
+```
+
+`cashflow` is `analyse_reselling`: `deployed`, `returned`, `net`, `balance`,
+`transaction_count`, and `source` (`revolut`, `investing`, or `none`).
+`inventory` is the sheet P&L (revenue, COGS, fees, `net_pl`, margin, capital
+tied up, category totals, best/worst flip). Item notes are not included. If
+the sheet cannot be read, `inventory` is `null` and `inventory_error` is
+`"reselling sheet unavailable"`; cashflow is still returned.
 
 ### Log a spend
 

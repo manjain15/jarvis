@@ -1,9 +1,9 @@
 [Unit]
-Description=Run Jarvis Gmail monitor every 30 minutes
+Description=Run Jarvis Gmail monitor every 60 minutes
 
 [Timer]
 OnBootSec=5min
-OnUnitActiveSec=30min
+OnUnitActiveSec=60min
 Unit=jarvis-gmail.service
 
 [Install]

@@ -860,8 +860,8 @@ def cmd_log(args):
     return f"✅ Logged to episodic: {text}"
 
 
-# Units checked by /status: the always-on service, then the timer-driven jobs.
-STATUS_ALWAYS_ON   = ["jarvis-telegram"]
+# Units checked by /status. Keep the always-on list in step with watchdog.ALWAYS_ON.
+STATUS_ALWAYS_ON   = ["jarvis-telegram", "jarvis-agent-api"]
 STATUS_TIMER_UNITS = [
     "jarvis-morningbrief", "jarvis-alerts", "jarvis-gmail",
     "jarvis-memory", "jarvis-jobsearch",

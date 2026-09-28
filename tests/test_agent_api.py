@@ -67,6 +67,11 @@ def test_every_route_requires_bearer():
         ("post", "/internships", {
             "actor": "career", "company": "Atlassian", "role": "SWE", "status": "applied",
         }),
+        ("get", "/finance", None),
+        ("get", "/finance/spending", None),
+        ("get", "/finance/savings", None),
+        ("get", "/finance/subscriptions", None),
+        ("get", "/finance/reselling", None),
     ]
     for method, path, body in checks:
         kwargs = {}

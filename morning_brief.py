@@ -30,6 +30,7 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 
 import os
+import re
 import sys
 import json
 import base64
@@ -381,6 +382,56 @@ def fetch_emails(creds, hours_back=18, max_emails=15):
 #   - Your recent emails
 #   - Exact instructions for how to write the brief
 
+# Do not raise this. A brief that needs more tokens is too long; cap the
+# prompt and salvage a truncated reply instead.
+BRIEF_MAX_TOKENS = 2500
+
+# Input pasted into the prompt. The model echoes what it is given, and the
+# finance block is kept long enough that the savings lines are not the part
+# that gets cut.
+PROMPT_SECTION_CAPS = {
+    "profile": 3200,
+    "calendar": 900,
+    "emails": 1400,
+    "checkin": 700,
+    "fitbit": 700,
+    "finance": 2600,
+    "hevy": 700,
+    "memory": 1000,
+    "jobs": 700,
+    "overload": 700,
+    "reselling": 800,
+    "tasks": 700,
+    "plan": 800,
+    "term": 1200,
+    "academic": 700,
+    "flags": 700,
+    "followup": 400,
+}
+
+_SHORT_BRIEF_SUFFIX = (
+    "\n\nThe previous reply was cut off. Rewrite the COMPLETE brief in under "
+    "280 words. At most 2 sentences per section. Omit profile updates. "
+    "End with the mindset sentence. Finished HTML only."
+)
+
+
+def cap_section(text, limit):
+    """
+    Trim a prompt section to limit characters.
+
+    Cuts on a line boundary when that still keeps most of the section, and
+    marks the cut so the model does not treat the fragment as complete data.
+    """
+    text = (text or "").strip()
+    if len(text) <= limit:
+        return text
+    cut = text[:limit].rsplit("\n", 1)[0].rstrip()
+    if len(cut) < limit // 2:
+        cut = text[:limit].rstrip()
+    return cut + "\n…(section shortened)"
+
+
 def build_prompt(profile_text, events, emails, today_str, checkin_summary=None, fitbit_data=None, finance_data=None, hevy_data=None, memory_data=None, jobs_data=None, overload_data=None, pokemon_data=None, tasks_data=None, daily_plan=None, proposals_text=None, term_data=None, term_flags=None, course_topics=None, academic_alerts=None, followup_note=None):
     """
     Constructs the full prompt sent to Claude.
@@ -397,12 +448,19 @@ def build_prompt(profile_text, events, emails, today_str, checkin_summary=None, 
     else:
         calendar_section = "  No events scheduled today."
 
-    # Format emails as readable text
+    # Format emails as readable text. Cap count and snippet so triage stays short.
     if emails:
-        email_section = "\n".join([
-            f"  • From: {e['sender']} | Subject: {e['subject']}\n    Preview: {e['snippet']}"
-            for e in emails
-        ])
+        shown = []
+        for e in emails[:6]:
+            snippet = (e.get("snippet") or "")[:140]
+            shown.append(
+                f"  • From: {e.get('sender', '')} | Subject: {e.get('subject', '')}\n"
+                f"    Preview: {snippet}"
+            )
+        extra = len(emails) - len(shown)
+        if extra > 0:
+            shown.append(f"  • +{extra} more unread (not listed)")
+        email_section = "\n".join(shown)
     else:
         email_section = "  No unread emails in the last 18 hours."
 
@@ -522,6 +580,24 @@ def build_prompt(profile_text, events, emails, today_str, checkin_summary=None, 
     _fin_goals = get_finance_goals()
     _fin_deadline_str = datetime.date.fromisoformat(_fin_goals["savings_deadline"]).strftime("%B %Y")
 
+    profile_text = cap_section(profile_text, PROMPT_SECTION_CAPS["profile"])
+    calendar_section = cap_section(calendar_section, PROMPT_SECTION_CAPS["calendar"])
+    email_section = cap_section(email_section, PROMPT_SECTION_CAPS["emails"])
+    checkin_section = cap_section(checkin_section, PROMPT_SECTION_CAPS["checkin"])
+    fitbit_section = cap_section(fitbit_section, PROMPT_SECTION_CAPS["fitbit"])
+    finance_section = cap_section(finance_section, PROMPT_SECTION_CAPS["finance"])
+    hevy_section = cap_section(hevy_section, PROMPT_SECTION_CAPS["hevy"])
+    memory_section = cap_section(memory_section, PROMPT_SECTION_CAPS["memory"])
+    jobs_section = cap_section(jobs_section, PROMPT_SECTION_CAPS["jobs"])
+    overload_section = cap_section(overload_section, PROMPT_SECTION_CAPS["overload"])
+    pokemon_section = cap_section(pokemon_section, PROMPT_SECTION_CAPS["reselling"])
+    tasks_section = cap_section(tasks_section, PROMPT_SECTION_CAPS["tasks"])
+    plan_section = cap_section(plan_section, PROMPT_SECTION_CAPS["plan"])
+    term_section = cap_section(term_section, PROMPT_SECTION_CAPS["term"])
+    academic_section = cap_section(academic_section, PROMPT_SECTION_CAPS["academic"])
+    flags_section = cap_section(flags_section, PROMPT_SECTION_CAPS["flags"])
+    followup_section = cap_section(followup_section, PROMPT_SECTION_CAPS["followup"])
+
     prompt = f"""You are Jarvis — a highly intelligent personal assistant who knows this person deeply.
 You speak directly, concisely, and with genuine intelligence. No fluff. No filler.
 You push them toward their goals. You're the voice in their ear that keeps them sharp.
@@ -616,55 +692,48 @@ MENTOR FOLLOW-UP DRAFT:
 YOUR TASK — write their morning briefing:
 ────────────────────────────
 
-Write a sharp, personal morning briefing in clean HTML (for email).
-Return ONLY raw HTML — no markdown, no code fences, no ```html wrapper. Start directly with the HTML.
-Structure it exactly like this — use the section headers, keep each section tight:
+Write a sharp morning briefing in clean HTML for email.
+Return ONLY raw HTML. No markdown, no code fences. Start with the h2.
+
+Hard limits — a cut-off brief is a failed brief:
+- Under 320 words total.
+- At most 2 sentences per section, or 4 short bullets for schedule and email.
+- Use only numbers and facts from the sections above. Do not invent drafts, balances, or emails.
+- Omit a section that has nothing to say (mentor, and profile updates, in particular).
 
 <h2>Good morning. Here's your day.</h2>
 
 <h3>📅 Today's schedule</h3>
-[List their events. If there are none, say something motivating about having a clear day.]
+At most 4 bullets. If the day is empty, one sentence.
 
 <h3>📬 Email triage</h3>
-[For each email: one line — who it's from, what it's about, and whether it needs action today.
-Flag urgency clearly. If nothing urgent, say so.]
+At most 4 lines. One line each: who, what, and whether it needs action today. If nothing urgent, one sentence.
 
 <h3>🎯 Your #1 priority today</h3>
-[Based on their goals and what's on their plate, what is the SINGLE most important thing
-they should do today? Be specific — not "work on your career" but something actionable.
-Rotate focus across: internship search, health, and their passion project.]
+One specific action, two sentences max. Rotate internship search, health, and the passion project across days.
 
 <h3>📚 Uni check</h3>
-[Use TERM CONTEXT. State current term + week. If any assessments are due within 7 days, surface
-the most urgent one (subject, name, days left, weight). If nothing is due soon, say so and nudge
-them to update term_context.json when Moodle releases dates. 2-3 lines.]
+Term and week. The single most urgent assessment inside 7 days (subject, name, days left, weight), or say nothing is due. Two sentences.
 
-<h3>💼 Internship pulse & new roles</h3>
-[Use TERM CONTEXT internship pipeline. Reference current statuses by company (Canva OA awaiting,
-Amazon/Dolby applied, etc.). If TERM FLAGS surface a stale application or an OA-awaiting-interview
-nudge, call it out by name. Then suggest ONE concrete action for today — apply somewhere new,
-follow up on a stale app, or prep for an upcoming interview. Be direct, not gentle.]
+<h3>💼 Internship pulse</h3>
+Name any stale or OA-waiting company from the flags, then one concrete action. Two sentences.
 
-<h3>🤝 Mentor & network</h3>
-[Use TERM CONTEXT mentor data. If awaiting_response and >=7 days have passed, push them to follow
-up today. If MENTOR FOLLOW-UP DRAFT below says a Gmail draft is waiting, tell Manav the subject
-and that it's in Drafts (do not invent a draft). Otherwise, one line on mentor status. Omit if nothing actionable.]
+<h3>🤝 Mentor</h3>
+One or two sentences. If a Gmail draft is waiting, give its subject and say it is in Drafts. Do not invent a draft. Omit the section if there is nothing to do.
 
 <h3>💪 Health check</h3>
-[Use FITBIT DATA for sleep/HR/steps AND HEVY DATA for workout tracking AND PROGRESSIVE OVERLOAD data. State actual sleep vs 7-8hr target, resting HR. Confirm if they trained yesterday, any PBs. State today's split. If any lifts are stalling, flag the most important one. 5-6 lines max, direct and specific.]
+Sleep versus a 7–8h target, whether they trained, today's split, and one stalling lift if any. Two sentences.
 
 <h3>💰 Finance flag</h3>
-[Use the FINANCE DATA — be specific with real numbers. Call out: unusual transactions over $50, any category spending that seems high vs a ~${_fin_goals['weekly_budget']:.0f}/week budget (~${_fin_goals['monthly_budget']:.0f}/month total spending), savings progress vs the ${_fin_goals['savings_goal']:,.0f} goal by {_fin_deadline_str}, and the RESELLING P&L (if net is negative, flag the burn rate and ask what's not moving; if positive, note the margin and ask what's working). 3-4 lines max, direct. ALSO: if today is Sunday, remind Manav to export his St. George CSV (everyday + savings + investing), drop them in the jarvis/finance/ folder, and run deploy/sync-finance-up.sh to push them to the VPS — this keeps finance tracking accurate for the week ahead.]
+Weekly spend versus the ~${_fin_goals['weekly_budget']:.0f}/week budget (~${_fin_goals['monthly_budget']:.0f}/month), savings versus ${_fin_goals['savings_goal']:,.0f} by {_fin_deadline_str}, and reselling net if the data has it. Two sentences. On Sunday, one extra sentence: export the St. George CSVs (everyday, savings, investing) into jarvis/finance/ and run deploy/sync-finance-up.sh.
 
 <h3>🔄 Profile & term updates</h3>
-[ONLY include this section if there are pending proposals in the data (profile OR term context). List each proposal concisely — what would change, and why. For profile proposals tell Manav to run 'python update_profile.py'; for term-context proposals tell him to run 'python term_updates.py'. If both types are pending, mention both commands. If no proposals at all, omit this section entirely.]
+Only if proposals are pending. One line each, plus the command: python update_profile.py for profile, python term_updates.py for term context. If there are no proposals, omit this section entirely.
 
 <h3>⚡ Today's mindset</h3>
-[ONE sentence. Sharp. Motivating. Personalised to where they are right now.
-Not generic. Make it land.]
+One sentence, specific to this week, then stop.
 
-Keep the total brief under 400 words. Write like you know them well — because you do.
-No corporate speak. No "Great news!" or "Here's a summary of...".
+Under 320 words. No corporate speak. No "Great news!" or "Here's a summary of...".
 Just start. Be Jarvis."""
 
     return prompt
@@ -674,24 +743,79 @@ Just start. Be Jarvis."""
 # STEP 5 — CALL CLAUDE
 # ─────────────────────────────────────────────────────────────────────────────
 
+def salvage_truncated_html(html):
+    """
+    Turn a max_tokens cutoff into HTML that still closes.
+
+    Drops a trailing unfinished tag, trims a cut-off word, closes tags the
+    brief opened, and appends one sentence so the email is not left mid-tag.
+    """
+    text = (html or "").strip()
+    last_lt = text.rfind("<")
+    last_gt = text.rfind(">")
+    if last_lt > last_gt:
+        text = text[:last_lt].rstrip()
+    if text and text[-1].isalnum():
+        boundary = max(text.rfind(". "), text.rfind("! "), text.rfind("? "), text.rfind("\n"))
+        if boundary > len(text) * 0.5:
+            text = text[:boundary + 1].rstrip()
+        else:
+            space = text.rfind(" ")
+            if space > 0:
+                text = text[:space].rstrip()
+
+    tag_re = re.compile(r"</?([a-zA-Z][a-zA-Z0-9]*)\b[^>]*?/?>", re.DOTALL)
+    stack = []
+    void = {"br", "hr", "img", "meta", "link"}
+    for match in tag_re.finditer(text):
+        raw = match.group(0)
+        name = match.group(1).lower()
+        if raw.startswith("</"):
+            if name in stack:
+                while stack and stack[-1] != name:
+                    stack.pop()
+                if stack and stack[-1] == name:
+                    stack.pop()
+            continue
+        if raw.endswith("/>") or name in void:
+            continue
+        stack.append(name)
+
+    closers = "".join(f"</{name}>" for name in reversed(stack))
+    note = "<p><em>Brief shortened to fit. Sections above stop at the cutoff.</em></p>"
+    return (text + closers + note).strip()
+
+
 def generate_brief(prompt):
     """
-    Sends the prompt to Claude and returns the HTML brief as a string.
-    Retries up to 5 times on overload errors with exponential backoff.
+    Send the prompt to Claude and return the HTML brief.
+
+    Retries overload (529) up to 5 times. If stop_reason is max_tokens, retries
+    once with a shorter instruction. A second cutoff is closed with
+    salvage_truncated_html instead of raising max_tokens. Does not send email.
     """
     import time
     client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
+    prompt_in_use = prompt
+    retried_short = False
 
     for attempt in range(5):
         try:
             message = client.messages.create(
                 model="claude-sonnet-4-6",
-                max_tokens=2500,
-                messages=[{"role": "user", "content": prompt}],
+                max_tokens=BRIEF_MAX_TOKENS,
+                messages=[{"role": "user", "content": prompt_in_use}],
             )
+            body = message.content[0].text if message.content else ""
+            if message.stop_reason == "max_tokens" and not retried_short and attempt < 4:
+                print("    ⚠️  Brief hit max_tokens — retrying once, shorter")
+                retried_short = True
+                prompt_in_use = prompt + _SHORT_BRIEF_SUFFIX
+                continue
             if message.stop_reason == "max_tokens":
-                print("    ⚠️  Brief hit max_tokens and was truncated — raise max_tokens")
-            return message.content[0].text
+                print("    ⚠️  Brief still truncated — sending a closed fallback")
+                return salvage_truncated_html(body)
+            return body
         except anthropic.APIStatusError as e:
             if e.status_code == 529 and attempt < 4:
                 wait = 10 * (2 ** attempt)  # 10s, 20s, 40s, 80s
@@ -699,6 +823,7 @@ def generate_brief(prompt):
                 time.sleep(wait)
             else:
                 raise
+    raise RuntimeError("brief generation failed")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

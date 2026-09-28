@@ -4,8 +4,21 @@ Jarvis — Gmail Monitor
 Periodically checks your inbox and pushes notifications for
 important emails that need your attention.
 
-Add to crontab (crontab -e):
-  */30 * * * * cd /Users/manavjain/jarvis && /Users/manavjain/jarvis/venv/bin/python gmail_monitor.py >> logs/gmail_monitor.log 2>&1
+Career and mentor follow-ups are owned by an external agent. Those threads
+are marked seen and not classified, so this job does not spend a Haiku call
+or send a duplicate alert. Payment, uni, bank, and other keep-signals still
+alert. The skip list is JARVIS_GMAIL_SKIP_CATEGORIES (default
+"internship,mentor"; set it empty to classify everything again).
+
+The systemd timer is hourly (deploy/systemd/jarvis-gmail.timer). Until that
+unit is reloaded on the VPS, JARVIS_GMAIL_MIN_INTERVAL_MINUTES (default 50)
+makes a leftover 30-minute timer skip the in-between run. 50 rather than 60
+so an hourly timer that fires a little early is not skipped.
+JARVIS_GMAIL_HOURS_BACK (default 2) stays wider than that gap so a message
+is not missed.
+
+Add to crontab (crontab -e), only if you are not using the systemd timer:
+  0 * * * * cd /Users/manavjain/jarvis && /Users/manavjain/jarvis/venv/bin/python gmail_monitor.py >> logs/gmail_monitor.log 2>&1
 """
 
 import warnings
@@ -53,6 +66,34 @@ IGNORE_SENDERS = [
     "newsletter", "marketing", "promotions", "deals", "offers",
     "spotify", "netflix", "uber", "deliveroo", "doordash",
 ]
+
+# Recruiting platforms are career mail even when the subject is generic.
+# Company domains (Google, Amazon, Canva) are not in this list: those
+# inboxes also carry orders and security alerts, which still go through
+# the classifier unless the subject itself is career or mentor.
+_RECRUITER_SENDERS = (
+    "seek.com", "linkedin", "workday", "greenhouse", "lever.co",
+    "smartrecruiters", "myworkday",
+)
+_CAREER_SUBJECTS = (
+    "application", "interview", "internship", "recruiter", "hiring", "screening",
+)
+_MENTOR_SUBJECTS = ("mentor",)
+# A keep-signal wins over the external-agent skip. "offer" alone is too broad
+# (promotions); a job offer still matches "hiring" / "interview" / recruiter.
+_KEEP_SUBJECTS = (
+    "payment", "invoice", "receipt", "salary", "paid", "assignment",
+    "submission", "result", "grade", "exam", "urgent", "action required",
+    "response needed", "security", "sign-in", "sign in", "password",
+    "verification",
+)
+_KEEP_SENDERS = (
+    "unsw", "myunsw", "moodle", "propwealth", "axis",
+    "stgeorge", "westpac", "ato.gov",
+)
+
+RUN_STAMP = SCRIPT_DIR / "data" / "gmail_monitor_stamp.json"
+_DEFAULT_SKIP = "internship,mentor"
 
 
 def get_credentials():
@@ -124,6 +165,99 @@ def is_priority(email):
     return any(kw in s for kw in PRIORITY_SENDERS) or any(kw in j for kw in PRIORITY_SUBJECTS)
 
 
+def _sender_blob(email):
+    return f"{email.get('sender', '')} {email.get('sender_email', '')}".lower()
+
+
+def skip_categories():
+    """
+    Categories the external career/mentor agent already handles.
+
+    JARVIS_GMAIL_SKIP_CATEGORIES is a comma-separated list. An empty value
+    disables the skip and classifies every priority email, as before.
+    """
+    raw = os.environ.get("JARVIS_GMAIL_SKIP_CATEGORIES", _DEFAULT_SKIP)
+    return {part.strip().lower() for part in raw.split(",") if part.strip()}
+
+
+def min_interval_minutes():
+    """Minimum gap between inbox checks. 0 disables the guard."""
+    raw = os.environ.get("JARVIS_GMAIL_MIN_INTERVAL_MINUTES", "50")
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        return 50
+
+
+def poll_hours_back():
+    """How far back to ask Gmail. Keep this at least as wide as the timer gap."""
+    raw = os.environ.get("JARVIS_GMAIL_HOURS_BACK", "2")
+    try:
+        return max(1, int(raw))
+    except (TypeError, ValueError):
+        return 2
+
+
+def has_keep_signal(email):
+    """
+    True when Jarvis should still alert even if the thread looks career-related.
+
+    Uni, bank, payroll, and explicit action-required mail stay local.
+    """
+    sender = _sender_blob(email)
+    subject = (email.get("subject") or "").lower()
+    return (
+        any(kw in subject for kw in _KEEP_SUBJECTS)
+        or any(kw in sender for kw in _KEEP_SENDERS)
+    )
+
+
+def externally_owned_category(email):
+    """
+    Return 'internship' or 'mentor' when the external agent owns this mail.
+
+    Recruiter-platform senders count as internship mail on their own. Other
+    senders need a career or mentor subject. A keep-signal always returns None
+    so payment and academic mail is still classified.
+    """
+    skipped = skip_categories()
+    if not skipped or has_keep_signal(email):
+        return None
+    sender = _sender_blob(email)
+    subject = (email.get("subject") or "").lower()
+    if "mentor" in skipped and any(kw in subject for kw in _MENTOR_SUBJECTS):
+        return "mentor"
+    if "internship" in skipped:
+        if any(kw in sender for kw in _RECRUITER_SENDERS):
+            return "internship"
+        if any(kw in subject for kw in _CAREER_SUBJECTS):
+            return "internship"
+        if "offer" in subject and any(kw in subject for kw in ("role", "position", "job", "intern", "candidate")):
+            return "internship"
+    return None
+
+
+def _ran_recently(now):
+    """True when the last successful check is inside the minimum interval."""
+    gap = min_interval_minutes()
+    if gap <= 0 or not RUN_STAMP.exists():
+        return False
+    try:
+        data = json.loads(RUN_STAMP.read_text())
+        last = datetime.datetime.fromisoformat(data["ts"])
+    except (OSError, json.JSONDecodeError, KeyError, ValueError):
+        return False
+    if last.tzinfo is None:
+        last = TIMEZONE.localize(last)
+    return now - last < datetime.timedelta(minutes=gap)
+
+
+def _stamp_run(now):
+    """Remember a successful check so a faster timer does not repeat the work."""
+    RUN_STAMP.parent.mkdir(parents=True, exist_ok=True)
+    RUN_STAMP.write_text(json.dumps({"ts": now.isoformat(timespec="seconds")}))
+
+
 def classify_email(email):
     import anthropic as _ant
     client = _ant.Anthropic(api_key=config.ANTHROPIC_API_KEY)
@@ -173,16 +307,27 @@ def send_notification(title, message, priority="default", tags=None):
         print(f"  ⚠️  Notification failed: {e}")
 
 
-def run_monitor():
+def run_monitor(force=False):
+    """
+    Check unread mail and notify on anything Jarvis still owns.
+
+    force=True ignores the minimum interval (manual runs). Career and mentor
+    mail is recorded as seen so a later run does not classify it again.
+    """
     tz  = TIMEZONE
     now = datetime.datetime.now(tz)
     print(f"\n📬  Gmail monitor — {now.strftime('%A %d %b, %-I:%M %p')}")
 
+    if not force and _ran_recently(now):
+        print("    Skipping — last check is inside the minimum interval\n")
+        return
+
     seen       = load_seen()
-    emails     = fetch_recent_emails(hours_back=1, max_emails=20)
+    emails     = fetch_recent_emails(hours_back=poll_hours_back(), max_emails=20)
     new_emails = [e for e in emails if e["id"] not in seen]
     print(f"    {len(new_emails)} new email(s) to check")
 
+    skipped = skip_categories()
     action_emails = []
     for email in new_emails:
         seen.add(email["id"])
@@ -190,8 +335,16 @@ def run_monitor():
             continue
         if not is_priority(email):
             continue
+        owned = externally_owned_category(email)
+        if owned:
+            print(f"  ↪   Left to external agent ({owned}): {email['subject'][:50]}")
+            continue
         print(f"  🔍  Classifying: {email['subject'][:50]}...")
         result = classify_email(email)
+        category = (result.get("category") or "").lower()
+        if result.get("needs_action") and category in skipped and not has_keep_signal(email):
+            print(f"  ↪   {category} owned externally — no alert")
+            continue
         if result.get("needs_action"):
             action_emails.append({**email, **result})
             print(f"  ✅  Action: {result['summary'][:60]}")
@@ -213,6 +366,7 @@ def run_monitor():
                           tags=["email", email.get("category", "mail")])
 
     save_seen(seen)
+    _stamp_run(now)
     print(f"    {len(action_emails)} action email(s) notified\n" if action_emails else "    All clear\n")
 
 
