@@ -686,9 +686,11 @@ def generate_brief(prompt):
         try:
             message = client.messages.create(
                 model="claude-sonnet-4-6",
-                max_tokens=1500,
+                max_tokens=2500,
                 messages=[{"role": "user", "content": prompt}],
             )
+            if message.stop_reason == "max_tokens":
+                print("    ⚠️  Brief hit max_tokens and was truncated — raise max_tokens")
             return message.content[0].text
         except anthropic.APIStatusError as e:
             if e.status_code == 529 and attempt < 4:

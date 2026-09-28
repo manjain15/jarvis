@@ -485,9 +485,11 @@ No corporate speak. No "Great work!" Start directly with the HTML."""
 
     message = client.messages.create(
         model="claude-sonnet-4-6",
-        max_tokens=2000,
+        max_tokens=3000,
         messages=[{"role": "user", "content": prompt}]
     )
+    if message.stop_reason == "max_tokens":
+        print("    ⚠️  Weekly review hit max_tokens and was truncated — raise max_tokens")
 
     return message.content[0].text.strip()
 
