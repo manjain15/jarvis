@@ -18,7 +18,7 @@ from collections import defaultdict
 
 import pytz
 import config
-from finance_tracker import parse_stgeorge_csv, EVERYDAY_CSV
+from finance_tracker import parse_stgeorge_csv, EVERYDAY_CSV, _is_internal_spend
 
 TIMEZONE = pytz.timezone(config.TIMEZONE)
 
@@ -89,6 +89,7 @@ def find_recurring(transactions, months=3):
         and t["debit"] > 0
         and not any(acc in t["description"] for acc in OWN_ACCOUNTS)
         and not any(kw in t["description"].lower() for kw in NORMAL_RECURRING)
+        and not _is_internal_spend(t.get("description", ""))
     ]
 
     # Group by normalised merchant

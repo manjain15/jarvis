@@ -174,6 +174,20 @@ DEFAULT_FINANCE_GOALS = {
     "weekly_budget":    75.00,
 }
 
+# Moves between the owner's own accounts. finance_tracker uses this so the
+# weekly budget ignores self-transfers (Osko to yourself, Revolut top-ups).
+# Override in term_context.json under "own_accounts"; missing fields keep these.
+DEFAULT_OWN_ACCOUNT_RULES = {
+    "owner_names": ["manav jain"],
+    "withdrawal_markers": [
+        "osko withdrawal",
+        "internet withdrawal",
+        "sct withdrawal",
+    ],
+    "card_patterns": ["revolut**5228", "revolut"],
+    "card_rails": ["visa purchase", "eftpos", "top-up", "topup"],
+}
+
 
 def _normalise_deadline(raw) -> str:
     """Parses an ISO date or a human 'January 2027'-style string into an ISO date string."""
@@ -213,6 +227,29 @@ def get_finance_goals() -> dict:
         "monthly_budget":   raw.get("monthly_budget", DEFAULT_FINANCE_GOALS["monthly_budget"]),
         "weekly_budget":    raw.get("weekly_budget", DEFAULT_FINANCE_GOALS["weekly_budget"]),
     }
+
+
+def get_own_account_rules() -> dict:
+    """
+    Patterns for money moving between the owner's own accounts.
+
+    Reads ctx["own_accounts"] when present. Missing or empty fields fall back
+    to DEFAULT_OWN_ACCOUNT_RULES. Every entry is a lowercase substring.
+    owner_names match a payee anywhere in an Osko/internet/Sct withdrawal.
+    card_patterns match top-ups of an account he already holds (Revolut).
+    """
+    raw = load_context().get("own_accounts") or {}
+    if not isinstance(raw, dict):
+        raw = {}
+
+    def _strings(key):
+        value = raw.get(key, DEFAULT_OWN_ACCOUNT_RULES[key])
+        if not isinstance(value, (list, tuple)):
+            value = DEFAULT_OWN_ACCOUNT_RULES[key]
+        cleaned = [str(item).strip().lower() for item in value if str(item).strip()]
+        return cleaned or list(DEFAULT_OWN_ACCOUNT_RULES[key])
+
+    return {key: _strings(key) for key in DEFAULT_OWN_ACCOUNT_RULES}
 
 
 def update_finance_goals(goals: dict):

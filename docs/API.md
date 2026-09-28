@@ -178,8 +178,11 @@ curl -sS -H "Authorization: Bearer $JARVIS_API_TOKEN" \
   "https://<your-host>/finance/spending?start=2026-09-22&end=2026-09-28"
 ```
 
-`by_category` is everyday-account debit totals (internal transfers and internet
-withdrawals excluded, same idea as the morning-brief total). `weekly_budget`
+`by_category` is everyday-account debit totals. Excluded, in the morning brief
+as well: internet withdrawals, transfers, Osko/Sct withdrawals whose payee is
+an owner name, and card top-ups of an own account (Revolut**5228). Names and
+card patterns default to Manav Jain / Revolut and can be overridden under
+`own_accounts` in `term_context.json`. `weekly_budget`
 is the `exchange_target` weekly budget ($75 unless `term_context.json` says
 otherwise). `budget_for_range` prorates that budget by `days / 7`.
 `weekly_equivalent` is spend scaled to a 7-day week. `over_budget` compares
