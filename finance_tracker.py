@@ -232,8 +232,9 @@ def parse_revolut_csv(filepath):
     """
     Parses a Revolut statement CSV export (AUD only, COMPLETED rows only).
     Returns transactions newest-first as {date, description, debit, credit,
-    balance, category, internal}. internal=True for top-ups and transfers
-    to/from your own accounts (money moving in/out, not purchases or sales).
+    balance, category, internal, refund}. internal=True for top-ups and transfers
+    to/from your own accounts (money moving in/out, not purchases or sales);
+    refund=True for card refunds (reduce deployed, not sale proceeds).
     Ordered by completed time (file order breaks ties) so [0] holds the
     latest balance.
     """
@@ -270,6 +271,7 @@ def parse_revolut_csv(filepath):
                     "balance":     balance,
                     "category":    "Reselling",
                     "internal":    internal,
+                    "refund":      kind == "card refund",
                     "_key":        (completed, idx),
                 })
             except (ValueError, KeyError):
@@ -383,7 +385,7 @@ def analyse_savings():
 def analyse_reselling(days=30):
     """
     Analyses the reselling account's working capital.
-    Debits = inventory purchases (capital deployed).
+    Debits = inventory purchases (capital deployed), net of card refunds.
     Credits = sale proceeds (capital returned).
     Uses finance/revolut.csv when present (own top-ups/transfers excluded via
     parse_revolut_csv), otherwise the St. George investing.csv (internal
@@ -410,8 +412,9 @@ def analyse_reselling(days=30):
         balance   = get_latest_balance(INVESTING_CSV)
         available = INVESTING_CSV.exists()
 
-    deployed = sum(t["debit"]  for t in recent)
-    returned = sum(t["credit"] for t in recent)
+    refunds  = sum(t["credit"] for t in recent if t.get("refund"))
+    deployed = sum(t["debit"]  for t in recent) - refunds
+    returned = sum(t["credit"] for t in recent if not t.get("refund"))
     net      = returned - deployed
 
     return {
