@@ -12,6 +12,26 @@ ExecStart=/home/jarvis/jarvis/venv/bin/python /home/jarvis/jarvis/agent_api.py -
 Restart=on-failure
 RestartSec=10
 Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+
+# The OS stays read-only. The checkout has to be writable as well as the
+# files below: atomic_write_json creates term_context.json.tmp and renames
+# it onto term_context.json, and file_lock creates term_context.json.lock.
+# rename(2) needs write permission on the directory. A per-file
+# ReadWritePaths entry does not grant that, so /home/jarvis/jarvis is
+# listed too. A leading "-" ignores a path that is not on disk yet.
+NoNewPrivileges=yes
+ProtectSystem=strict
+PrivateTmp=yes
+ReadWritePaths=-/home/jarvis/jarvis/data
+ReadWritePaths=-/home/jarvis/jarvis/term_context.json
+ReadWritePaths=-/home/jarvis/jarvis/term_context.json.bak
+ReadWritePaths=-/home/jarvis/jarvis/term_context.json.tmp
+ReadWritePaths=-/home/jarvis/jarvis/term_context.json.lock
+ReadWritePaths=-/home/jarvis/jarvis/token.json
+ReadWritePaths=-/home/jarvis/jarvis/token.json.tmp
+ReadWritePaths=-/home/jarvis/jarvis/memory/mem0_db
+ReadWritePaths=/home/jarvis/jarvis
 
 [Install]
 WantedBy=multi-user.target

@@ -8,6 +8,9 @@ Type=simple
 User=jarvis
 Group=jarvis
 WorkingDirectory=/home/jarvis/jarvis
+# live_spend.py binds 127.0.0.1 unless JARVIS_SPEND_HOST is set in .env.
+# The iPhone Back Tap shortcut posts to http://<vps>:5556/spend. Set
+# JARVIS_SPEND_HOST=0.0.0.0 to keep that working.
 ExecStart=/home/jarvis/jarvis/venv/bin/python /home/jarvis/jarvis/live_spend.py --serve
 Restart=on-failure
 RestartSec=10

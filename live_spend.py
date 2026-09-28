@@ -9,6 +9,10 @@ HOW IT WORKS:
        POST http://<vps>:5556/spend
        Headers: X-Jarvis-Token: <token from data/.spend_token>
        Body (JSON): {"amount": 14.50, "category": "Food & dining", "note": "coffee"}
+     The process listens on 127.0.0.1 by default (JARVIS_SPEND_HOST overrides).
+     The shortcut above only works if the phone can reach that address.
+     Set JARVIS_SPEND_HOST=0.0.0.0 in .env to keep posting to the VPS IP,
+     or point the shortcut at a tunnel that forwards to 127.0.0.1:5556.
   3. Entry is appended to data/live_spend.jsonl
   4. finance_tracker.get_finance_summary() shows live-logged spend alongside
      the CSV data and reconciles the two (CSV remains the source of truth)
@@ -25,7 +29,10 @@ data sources aggregate cleanly.
 
 import argparse
 import datetime
+import hashlib
+import hmac
 import json
+import os
 import secrets
 from pathlib import Path
 
@@ -40,6 +47,7 @@ TOKEN_FILE = DATA_DIR / ".spend_token"
 TIMEZONE = pytz.timezone(config.TIMEZONE)
 
 SERVER_PORT = 5556
+DEFAULT_BIND_HOST = "127.0.0.1"
 MAX_AMOUNT  = 5000.00  # sanity cap — reject fat-finger / junk entries
 
 # Must mirror the category names in finance_tracker.CATEGORY_RULES (+ Other)
@@ -62,6 +70,33 @@ def load_token():
     if TOKEN_FILE.exists():
         return TOKEN_FILE.read_text().strip() or None
     return None
+
+
+def token_matches(provided, expected):
+    """
+    Constant-time check of the X-Jarvis-Token header.
+
+    Both sides are hashed first so a different length cannot throw and
+    cannot leak the secret through an early exit. An empty token never matches.
+    """
+    if not expected or not provided:
+        return False
+    return hmac.compare_digest(
+        hashlib.sha256(str(provided).encode("utf-8")).digest(),
+        hashlib.sha256(str(expected).encode("utf-8")).digest(),
+    )
+
+
+def bind_host():
+    """
+    Address to listen on. Defaults to loopback.
+
+    The iPhone Back Tap shortcut posts to http://<vps>:5556/spend. That
+    reaches this process only when it is bound to an address the phone can
+    route to. Set JARVIS_SPEND_HOST=0.0.0.0 to keep that shortcut working.
+    config.load_dotenv reads the variable from .env.
+    """
+    return os.environ.get("JARVIS_SPEND_HOST", "").strip() or DEFAULT_BIND_HOST
 
 
 def generate_token():
@@ -198,7 +233,7 @@ def create_app():
     @app.post("/spend")
     def spend():
         """Auth-checked endpoint the iOS Shortcut POSTs entries to."""
-        if request.headers.get("X-Jarvis-Token", "") != token:
+        if not token_matches(request.headers.get("X-Jarvis-Token", ""), token):
             return jsonify({"error": "unauthorized"}), 401
         body = request.get_json(silent=True) or {}
         try:
@@ -247,6 +282,8 @@ if __name__ == "__main__":
         print(f"Logged test entry: {entry}")
         _print_summary()
     elif args.serve:
-        create_app().run(host="0.0.0.0", port=SERVER_PORT)
+        host = bind_host()
+        print(f"Live spend listening on http://{host}:{SERVER_PORT}")
+        create_app().run(host=host, port=SERVER_PORT)
     else:
         _print_summary()
