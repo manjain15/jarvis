@@ -1,8 +1,8 @@
 """
 Jarvis — Agent HTTP API
 =======================
-A small read-mostly API so an external assistant (for example a Grok bot)
-can query Jarvis over HTTP.
+A small HTTP API so an external assistant (for example a Grok bot)
+can query Jarvis, and correct stale mentor / internship records.
 
 This is a separate process from dashboard.py and live_spend.py:
 
@@ -25,6 +25,9 @@ Do not open the port on the public firewall. See docs/API.md.
 COST:
   POST /ask is one Claude call, the same order of cost as a Telegram message.
   GET /memory/search hits Mem0 (OpenAI embeddings). Do not poll either.
+  Mentor and internship writes do not call Anthropic. They update
+  term_context.json through term_context.mutate_context and append
+  data/agent_api_audit.jsonl.
 
 SETUP:
   Add JARVIS_API_TOKEN to .env (long random string).
@@ -32,6 +35,7 @@ SETUP:
 """
 
 import argparse
+import datetime
 import hashlib
 import hmac
 import json
@@ -42,11 +46,18 @@ from pathlib import Path
 import pytz
 
 import config
-from json_store import atomic_write_json
+import term_context
+from json_store import atomic_write_json, file_lock
 
 SCRIPT_DIR = Path(__file__).parent
 DATA_DIR   = SCRIPT_DIR / "data"
 BRIEF_FILE = DATA_DIR / "latest_brief.json"
+AUDIT_FILE = DATA_DIR / "agent_api_audit.jsonl"
+
+_ACTOR_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$")
+_MENTOR_BODY_KEYS = {"actor", "reason", *term_context.MENTOR_WRITABLE_FIELDS}
+_INTERNSHIP_PATCH_KEYS = {"actor", "reason", "company", "role", *term_context.INTERNSHIP_WRITABLE_FIELDS}
+_INTERNSHIP_ADD_KEYS = {"actor", "reason", "company", "role", "status", "last_update", "next_action", "notes"}
 
 TIMEZONE     = pytz.timezone(config.TIMEZONE)
 DEFAULT_PORT = 5557
@@ -285,6 +296,201 @@ def log_spend_entry(amount, category, note=""):
     }
 
 
+def _json_object(body):
+    """Require a JSON object. Flask returns None for a missing or invalid body."""
+    if not isinstance(body, dict):
+        raise ValueError("JSON object required")
+
+
+def _reject_nulls(body):
+    """JSON null is not a way to clear a field. Omit the key, or send an empty string."""
+    for key, value in body.items():
+        if value is None:
+            raise ValueError(f"{key} must not be null")
+
+
+def _reject_unknown_fields(body, allowed):
+    """Reject keys outside the route's allowlist so stray fields cannot be stored."""
+    extra = sorted(set(body) - set(allowed))
+    if extra:
+        raise ValueError(f"unknown field(s): {', '.join(extra)}")
+
+
+def _actor(body):
+    """Return the external agent name recorded in the audit log."""
+    if "actor" not in body or body["actor"] is None:
+        raise ValueError("actor is required")
+    raw = body["actor"]
+    if not isinstance(raw, str) or not raw.strip():
+        raise ValueError("actor is required")
+    actor = raw.strip()
+    if not _ACTOR_RE.fullmatch(actor):
+        raise ValueError("actor must be 1-40 characters (letters, digits, '.', '_', '-')")
+    return actor
+
+
+def _reason(body):
+    """Optional audit-only explanation. Not written into term_context.json."""
+    if "reason" not in body:
+        return ""
+    value = body["reason"]
+    if not isinstance(value, str):
+        raise ValueError("reason must be a string")
+    text = value.strip()
+    if len(text) > 300:
+        raise ValueError("reason must be 300 characters or fewer")
+    if any(ord(ch) < 32 and ch not in "\n\t" for ch in text):
+        raise ValueError("reason contains control characters")
+    return text
+
+
+def append_external_audit(entry):
+    """
+    Append one JSON line to data/agent_api_audit.jsonl.
+
+    The line records who (actor), when (ts), and what changed (old and new
+    values). Locked so two writers cannot interleave a line. This file is
+    gitignored with the rest of data/ and is not exposed over HTTP.
+    """
+    if not isinstance(entry, dict):
+        raise ValueError("audit entry must be an object")
+    line = json.dumps(entry, ensure_ascii=False, default=str, separators=(",", ":")) + "\n"
+    AUDIT_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with file_lock(AUDIT_FILE):
+        with open(AUDIT_FILE, "a", encoding="utf-8") as handle:
+            handle.write(line)
+            handle.flush()
+            os.fsync(handle.fileno())
+
+
+def _audit_entry(actor, action, target, reason, old, new):
+    """Build one audit record. old/new are the changed fields, or the new row on add."""
+    return {
+        "ts": datetime.datetime.now(TIMEZONE).isoformat(timespec="seconds"),
+        "actor": actor,
+        "action": action,
+        "target": target,
+        "reason": reason,
+        "old": old,
+        "new": new,
+    }
+
+
+def apply_mentor_write(body):
+    """
+    Patch the mentor record and audit the diff.
+
+    Applies immediately through term_context.patch_mentor so GET /flags
+    sees the correction on the next read. The term_updates queue is for
+    overnight Claude suggestions; leaving this correction there would keep
+    flags stale until a manual review, so the write goes straight to
+    term_context.json. The audit callback runs inside the context lock,
+    before the atomic replace. If it raises, term_context.json stays as it was.
+    """
+    _json_object(body)
+    _reject_unknown_fields(body, _MENTOR_BODY_KEYS)
+    _reject_nulls(body)
+    actor = _actor(body)
+    reason = _reason(body)
+    updates = {key: body[key] for key in term_context.MENTOR_WRITABLE_FIELDS if key in body}
+
+    def _audit(old, new, _record):
+        append_external_audit(_audit_entry(
+            actor, "mentor_update", {"record": "mentor"}, reason, old, new,
+        ))
+
+    result = term_context.patch_mentor(updates, audit_fn=_audit)
+    return {
+        "ok": True,
+        "changed": result["changed"],
+        "audit_logged": result["changed"],
+        "changes": result["changes"],
+        "mentor": result["record"],
+    }
+
+
+def apply_internship_write(body):
+    """
+    Patch one internship row and audit the diff.
+
+    `company` selects the row. `role` is required only when that company has
+    more than one application. Status, last_update, next_action, and notes
+    are the only stored fields this route will change.
+    """
+    _json_object(body)
+    _reject_unknown_fields(body, _INTERNSHIP_PATCH_KEYS)
+    _reject_nulls(body)
+    actor = _actor(body)
+    reason = _reason(body)
+    if "company" not in body:
+        raise ValueError("company is required")
+    updates = {key: body[key] for key in term_context.INTERNSHIP_WRITABLE_FIELDS if key in body}
+    role = body["role"] if "role" in body else None
+
+    def _audit(old, new, record):
+        target = {
+            "company": record.get("company", ""),
+            "role": record.get("role", ""),
+        }
+        append_external_audit(_audit_entry(
+            actor, "internship_update", target, reason, old, new,
+        ))
+
+    result = term_context.patch_internship(
+        body["company"], updates, role=role, audit_fn=_audit,
+    )
+    return {
+        "ok": True,
+        "changed": result["changed"],
+        "audit_logged": result["changed"],
+        "changes": result["changes"],
+        "internship": result["record"],
+    }
+
+
+def apply_internship_add(body):
+    """
+    Append one internship application and audit the new row.
+
+    Duplicate company+role (case-insensitive) is rejected. last_update
+    defaults to today inside term_context.add_internship when omitted.
+    """
+    _json_object(body)
+    _reject_unknown_fields(body, _INTERNSHIP_ADD_KEYS)
+    _reject_nulls(body)
+    actor = _actor(body)
+    reason = _reason(body)
+    for key in ("company", "role", "status"):
+        if key not in body:
+            raise ValueError(f"{key} is required")
+
+    def _audit(old, new, _record):
+        append_external_audit(_audit_entry(
+            actor,
+            "internship_add",
+            {"company": new.get("company"), "role": new.get("role")},
+            reason,
+            old,
+            new,
+        ))
+
+    result = term_context.add_internship(
+        body["company"],
+        body["role"],
+        body["status"],
+        last_update=body["last_update"] if "last_update" in body else None,
+        next_action=body["next_action"] if "next_action" in body else "",
+        notes=body["notes"] if "notes" in body else "",
+        audit_fn=_audit,
+    )
+    return {
+        "ok": True,
+        "changed": True,
+        "audit_logged": True,
+        "internship": result["record"],
+    }
+
+
 def _bounded_int(raw, default, lo, hi, name):
     """Parse a query integer, or return default. Raises ValueError when out of range."""
     if raw is None or raw == "":
@@ -397,6 +603,36 @@ def create_app(token=None):
         except Exception as e:
             print(f"⚠️  /spend failed: {e}")
             return jsonify({"error": "spend failed"}), 500
+
+    def _commit(handler, label, success_status=200):
+        """Run a term-context write and map record errors to HTTP status codes."""
+        body = request.get_json(silent=True)
+        try:
+            return jsonify(handler(body)), success_status
+        except term_context.TermRecordNotFound as e:
+            return jsonify({"error": str(e)}), 404
+        except term_context.TermRecordConflict as e:
+            return jsonify({"error": str(e)}), 409
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        except Exception as e:
+            print(f"⚠️  {label} failed: {e}")
+            return jsonify({"error": f"{label} failed"}), 500
+
+    @app.patch("/mentor")
+    def patch_mentor():
+        """Correct the mentor record. GET /flags reads the same file."""
+        return _commit(apply_mentor_write, "mentor update")
+
+    @app.patch("/internships")
+    def patch_internship():
+        """Correct one internship row, matched by company and optional role."""
+        return _commit(apply_internship_write, "internship update")
+
+    @app.post("/internships")
+    def add_internship():
+        """Add one internship application."""
+        return _commit(apply_internship_add, "internship add", success_status=201)
 
     return app
 

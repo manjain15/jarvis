@@ -24,10 +24,15 @@ UPDATE WORKFLOW:
   - Update internship statuses after each touchpoint
   - Update mentor.last_contact after every conversation
   - Bump term.week each Monday (or automate via start_date)
+
+Validated writers (patch_mentor, patch_internship, add_internship) share
+mutate_context with the CLI helpers. The agent API uses those writers so
+external corrections hit the same locked, atomic file the flags read.
 """
 
 import json
 import datetime
+import re
 from pathlib import Path
 
 import pytz
@@ -37,6 +42,50 @@ from json_store import file_lock, atomic_write_json
 SCRIPT_DIR   = Path(__file__).parent
 CONTEXT_FILE = SCRIPT_DIR / "term_context.json"
 TIMEZONE     = pytz.timezone(config.TIMEZONE)
+
+# Statuses the term-update prompt and internship flags already understand.
+# offer / rejected / withdrawn stop stale nudges; OA_completed always nudges.
+INTERNSHIP_STATUSES = (
+    "applied",
+    "OA_completed",
+    "interview",
+    "offer",
+    "rejected",
+    "withdrawn",
+)
+
+MENTOR_WRITABLE_FIELDS = (
+    "last_contact",
+    "last_topic",
+    "awaiting_response",
+    "next_action",
+    "notes",
+)
+INTERNSHIP_WRITABLE_FIELDS = (
+    "status",
+    "last_update",
+    "next_action",
+    "notes",
+)
+
+_TEXT_LIMITS = {
+    "last_topic": 300,
+    "next_action": 300,
+    "notes": 2000,
+}
+_NAME_LIMITS = {
+    "company": 80,
+    "role": 120,
+}
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+class TermRecordNotFound(LookupError):
+    """No mentor or internship record matched the request."""
+
+
+class TermRecordConflict(Exception):
+    """The internship match is ambiguous, or that application already exists."""
 
 
 # ── Loader ────────────────────────────────────────────────────────────────────
@@ -467,6 +516,255 @@ def mark_assessment_done(subject_code: str, assessment_name: str):
         print(f"✅ Marked {subject_code} — {matched['name']} as submitted")
     else:
         print("❌ Assessment not found")
+
+
+def _parse_iso_date(value, field):
+    """Return a YYYY-MM-DD date that is not in the future (Australia/Sydney)."""
+    if not isinstance(value, str) or not _DATE_RE.match(value.strip()):
+        raise ValueError(f"{field} must be an ISO date (YYYY-MM-DD)")
+    raw = value.strip()
+    try:
+        parsed = datetime.date.fromisoformat(raw)
+    except ValueError:
+        raise ValueError(f"{field} must be an ISO date (YYYY-MM-DD)")
+    today = datetime.datetime.now(TIMEZONE).date()
+    if parsed > today:
+        raise ValueError(f"{field} cannot be in the future")
+    if parsed.year < 2000:
+        raise ValueError(f"{field} is unreasonably old")
+    return parsed.isoformat()
+
+
+def _parse_text(value, field, max_len):
+    """Strip a text field. Empty is allowed. Rejects non-strings and control chars."""
+    if not isinstance(value, str):
+        raise ValueError(f"{field} must be a string")
+    text = value.strip()
+    if len(text) > max_len:
+        raise ValueError(f"{field} must be {max_len} characters or fewer")
+    if any(ord(ch) < 32 and ch not in "\n\t" for ch in text):
+        raise ValueError(f"{field} contains control characters")
+    return text
+
+
+def _parse_name(value, field):
+    """Strip a single-line company or role name. Empty is rejected."""
+    text = _parse_text(value, field, _NAME_LIMITS[field])
+    if not text:
+        raise ValueError(f"{field} is required")
+    if any(ch in text for ch in "\n\t"):
+        raise ValueError(f"{field} must be a single line")
+    return text
+
+
+def _parse_status(value):
+    """Return a known internship status. Matching is exact after stripping."""
+    if not isinstance(value, str):
+        raise ValueError("status must be a string")
+    status = value.strip()
+    if status not in INTERNSHIP_STATUSES:
+        allowed = ", ".join(INTERNSHIP_STATUSES)
+        raise ValueError(f"status must be one of: {allowed}")
+    return status
+
+
+def _clean_mentor_updates(updates):
+    """Validate allowlisted mentor fields. Unknown keys and bad types raise ValueError."""
+    if not isinstance(updates, dict) or not updates:
+        raise ValueError("at least one mentor field is required")
+    unknown = sorted(set(updates) - set(MENTOR_WRITABLE_FIELDS))
+    if unknown:
+        raise ValueError(f"unknown field(s): {', '.join(unknown)}")
+    cleaned = {}
+    if "last_contact" in updates:
+        cleaned["last_contact"] = _parse_iso_date(updates["last_contact"], "last_contact")
+    if "last_topic" in updates:
+        cleaned["last_topic"] = _parse_text(updates["last_topic"], "last_topic", _TEXT_LIMITS["last_topic"])
+    if "awaiting_response" in updates:
+        value = updates["awaiting_response"]
+        if not isinstance(value, bool):
+            raise ValueError("awaiting_response must be a boolean")
+        cleaned["awaiting_response"] = value
+    if "next_action" in updates:
+        cleaned["next_action"] = _parse_text(updates["next_action"], "next_action", _TEXT_LIMITS["next_action"])
+    if "notes" in updates:
+        cleaned["notes"] = _parse_text(updates["notes"], "notes", _TEXT_LIMITS["notes"])
+    return cleaned
+
+
+def _clean_internship_updates(updates):
+    """Validate allowlisted internship fields. Unknown keys and bad types raise ValueError."""
+    if not isinstance(updates, dict) or not updates:
+        raise ValueError("at least one internship field is required")
+    unknown = sorted(set(updates) - set(INTERNSHIP_WRITABLE_FIELDS))
+    if unknown:
+        raise ValueError(f"unknown field(s): {', '.join(unknown)}")
+    cleaned = {}
+    if "status" in updates:
+        cleaned["status"] = _parse_status(updates["status"])
+    if "last_update" in updates:
+        cleaned["last_update"] = _parse_iso_date(updates["last_update"], "last_update")
+    if "next_action" in updates:
+        cleaned["next_action"] = _parse_text(updates["next_action"], "next_action", _TEXT_LIMITS["next_action"])
+    if "notes" in updates:
+        cleaned["notes"] = _parse_text(updates["notes"], "notes", _TEXT_LIMITS["notes"])
+    return cleaned
+
+
+def _internship_rows(ctx):
+    """Return the internships list, or raise if the stored value is the wrong type."""
+    rows = ctx.get("internships", [])
+    if rows is None:
+        return []
+    if not isinstance(rows, list):
+        raise ValueError("internships must be a list")
+    return rows
+
+
+def _select_internship(rows, company, role):
+    """
+    Find one internship by company, optionally disambiguated by role.
+
+    Comparison is case-insensitive. Zero matches raise TermRecordNotFound.
+    More than one match raises TermRecordConflict.
+    """
+    company_norm = company.casefold()
+    role_norm = role.casefold() if role is not None else None
+    matches = []
+    for app in rows:
+        if not isinstance(app, dict):
+            continue
+        if str(app.get("company") or "").strip().casefold() != company_norm:
+            continue
+        if role_norm is not None and str(app.get("role") or "").strip().casefold() != role_norm:
+            continue
+        matches.append(app)
+    label = company if role is None else f"{company} ({role})"
+    if not matches:
+        raise TermRecordNotFound(f"internship not found: {label}")
+    if len(matches) > 1:
+        roles = ", ".join(sorted({str(app.get("role") or "").strip() or "(no role)" for app in matches}))
+        raise TermRecordConflict(f"multiple internships match {company}; pass role ({roles})")
+    return matches[0]
+
+
+def patch_mentor(updates, audit_fn=None):
+    """
+    Update allowlisted mentor fields in term_context.json.
+
+    Writes through mutate_context (locked, atomic). Only keys in
+    MENTOR_WRITABLE_FIELDS are accepted. A missing mentor record raises
+    TermRecordNotFound. When a value actually changes and audit_fn is set,
+    audit_fn(old, new, record) runs inside the lock before the file is replaced;
+    if it raises, the file is left unchanged.
+    """
+    cleaned = _clean_mentor_updates(updates)
+    result = {}
+
+    def _mutate(ctx):
+        mentor = ctx.get("mentor")
+        if not isinstance(mentor, dict):
+            raise TermRecordNotFound("mentor record not found")
+        old, new = {}, {}
+        for key, value in cleaned.items():
+            previous = mentor.get(key)
+            if previous != value:
+                old[key] = previous
+                new[key] = value
+                mentor[key] = value
+        if old and audit_fn is not None:
+            audit_fn(old, new, dict(mentor))
+        result["changed"] = bool(old)
+        result["changes"] = {key: {"old": old[key], "new": new[key]} for key in old}
+        result["record"] = dict(mentor)
+
+    mutate_context(_mutate)
+    return result
+
+
+def patch_internship(company, updates, role=None, audit_fn=None):
+    """
+    Update one internship's allowlisted fields in term_context.json.
+
+    `company` is required. Pass `role` when more than one row shares that
+    company. `last_update` is stored as sent. audit_fn(old, new, record)
+    behaves the same as in patch_mentor.
+    """
+    company_name = _parse_name(company, "company")
+    role_name = _parse_name(role, "role") if role is not None else None
+    cleaned = _clean_internship_updates(updates)
+    result = {}
+
+    def _mutate(ctx):
+        app = _select_internship(_internship_rows(ctx), company_name, role_name)
+        old, new = {}, {}
+        for key, value in cleaned.items():
+            previous = app.get(key)
+            if previous != value:
+                old[key] = previous
+                new[key] = value
+                app[key] = value
+        if old and audit_fn is not None:
+            audit_fn(old, new, dict(app))
+        result["changed"] = bool(old)
+        result["changes"] = {key: {"old": old[key], "new": new[key]} for key in old}
+        result["record"] = dict(app)
+        result["target"] = {
+            "company": app.get("company", company_name),
+            "role": app.get("role", ""),
+        }
+
+    mutate_context(_mutate)
+    return result
+
+
+def add_internship(company, role, status, last_update=None, next_action="", notes="", audit_fn=None):
+    """
+    Append one internship application to term_context.json.
+
+    Required: company, role, and a known status. last_update defaults to today
+    in Australia/Sydney. A company+role pair that already exists raises
+    TermRecordConflict. audit_fn(None, record, record) runs inside the lock
+    before the file is replaced when provided.
+    """
+    record = {
+        "company": _parse_name(company, "company"),
+        "role": _parse_name(role, "role"),
+        "status": _parse_status(status),
+        "last_update": (
+            _parse_iso_date(last_update, "last_update")
+            if last_update is not None
+            else datetime.datetime.now(TIMEZONE).date().isoformat()
+        ),
+        "next_action": _parse_text(next_action if next_action is not None else "", "next_action", _TEXT_LIMITS["next_action"]),
+        "notes": _parse_text(notes if notes is not None else "", "notes", _TEXT_LIMITS["notes"]),
+    }
+    result = {}
+
+    def _mutate(ctx):
+        rows = ctx.get("internships")
+        if rows is None:
+            rows = []
+            ctx["internships"] = rows
+        if not isinstance(rows, list):
+            raise ValueError("internships must be a list")
+        for app in rows:
+            if not isinstance(app, dict):
+                continue
+            same_company = str(app.get("company") or "").strip().casefold() == record["company"].casefold()
+            same_role = str(app.get("role") or "").strip().casefold() == record["role"].casefold()
+            if same_company and same_role:
+                raise TermRecordConflict(
+                    f"internship already exists: {record['company']} ({record['role']})"
+                )
+        if audit_fn is not None:
+            audit_fn(None, dict(record), dict(record))
+        rows.append(record)
+        result["record"] = dict(record)
+        result["target"] = {"company": record["company"], "role": record["role"]}
+
+    mutate_context(_mutate)
+    return result
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
