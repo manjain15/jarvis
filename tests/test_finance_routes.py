@@ -336,3 +336,58 @@ def test_redact_leaves_dates_and_amounts():
     assert cleaned["amount"] == 22.5
     assert ACCOUNT not in cleaned["note"]
     assert "[redacted]" in cleaned["note"]
+    assert agent_api.redact_account_numbers("total $14.50") == "total $14.50"
+    assert agent_api.redact_account_numbers("2026-09-22 2026-09-28") == "2026-09-22 2026-09-28"
+
+
+def test_redact_each_sensitive_shape():
+    shapes = {
+        "card spaces": "4111 1111 1111 1111",
+        "card dashes": "4111-1111-1111-1111",
+        "spaced account": "000 020 685 0220",
+        "spaced phone": "0412 345 678",
+        "dashed phone": "0412-345-678",
+        "masked last4": "xx1234",
+        "masked stars": "card **5228",
+        "payid email": "alex.jain+rent@payid.com.au",
+    }
+    for label, secret in shapes.items():
+        cleaned = agent_api.redact_account_numbers(f"paid {secret} today")
+        assert secret not in cleaned, label
+        assert "[redacted]" in cleaned, label
+
+    osko = agent_api.redact_account_numbers("Osko Withdrawal 22Sep Knockout R Jaiswal")
+    assert "Jaiswal" not in osko
+    assert "Knockout" in osko
+    assert "[redacted]" in osko
+    sct = agent_api.redact_account_numbers("Sct Deposit 23Sep09:11 Rishi Jaiswal")
+    assert "Jaiswal" not in sct
+    assert "Rishi" not in sct
+
+
+def test_flagged_description_is_redacted_before_truncation(tmp_path, monkeypatch):
+    today = _today()
+    everyday, _savings = _patch_files(monkeypatch, tmp_path)
+    pan = "4111222233334444"
+    desc = ("M" * 73) + pan
+    fragment = desc[:80][73:]
+    assert len(fragment) == 7
+    spaced = "Visa Purchase SHOP 4111 1111 1111 1111"
+    _write_csv(everyday, [
+        [_dmy(today), desc, "200.00", "", "100.00"],
+        [_dmy(today), "Osko Withdrawal 22Sep Knockout R Jaiswal", "120.00", "", "100.00"],
+        [_dmy(today), spaced, "90.00", "", "100.00"],
+    ])
+    res = _client().get("/finance/spending", headers=AUTH)
+    assert res.status_code == 200
+    text = res.get_data(as_text=True)
+    flagged = res.get_json()["flagged"]
+    assert pan not in text
+    assert fragment not in text
+    assert "4111" not in text
+    assert "Jaiswal" not in text
+    assert "Knockout" in text
+    assert all(len(row["description"]) <= 80 for row in flagged)
+    long = next(row for row in flagged if row["amount"] == 200)
+    assert "[redacted]" in long["description"]
+    assert long["description"].endswith("[redacted]")

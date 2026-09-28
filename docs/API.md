@@ -158,9 +158,15 @@ section below in one response; a section that throws is
 `{"available": false, "error": "..."}` and its name is listed in `unavailable`.
 A missing CSV is `available: false` inside that section and is not an error.
 
-Account numbers (runs of 8 or more digits in a bank description) are replaced
-with `[redacted]` before the response is sent. Dollar amounts, dates, and
-category names are unchanged.
+Sensitive text in bank descriptions is replaced with `[redacted]` before the
+response is sent, and only then shortened. That covers a run of 8 or more
+digits, the same run with spaces or dashes (card numbers, spaced account
+numbers, phone numbers), a masked last-4 such as `xx1234` or `**5228`, and
+email addresses (PayID). On an Osko, Sct, or PayID line the trailing payee
+name is removed as well. Dollar amounts, ISO dates (`2026-09-28`), and
+category names are unchanged. `flagged[].description` is capped at 80
+characters and subscription `sample` at 45 after that redaction, so a number
+that crosses the cap cannot leave a short digit fragment.
 
 `start` and `end` are optional `YYYY-MM-DD` dates, inclusive, Australia/Sydney.
 Send both or neither. The default window is the last 7 days ending today.
@@ -244,12 +250,25 @@ the sheet cannot be read, `inventory` is `null` and `inventory_error` is
 
 ### Log a spend
 
-Same categories and validation as the Back Tap logger.
+Same categories and validation as the Back Tap logger. `actor` is required
+(same rules as the other writes). Optional `reason` is stored in the audit
+log only. A successful call appends `data/agent_api_audit.jsonl` with
+`action: "spend"`.
+
+Send `Idempotency-Key` to make a retry return the original JSON instead of
+logging a second spend. Reusing that key for a different amount, category,
+or note returns 409. A retry that omits the header is still collapsed when
+amount, category, and note match a spend from the last 60 seconds. A
+different key is a new spend even inside that window.
+
+`POST /ask`, `POST /spend`, and the term-context writes require a JSON
+object. An array, string, number, or invalid body is 400.
 
 ```
 curl -sS -H "Authorization: Bearer $JARVIS_API_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"amount": 14.50, "category": "Food & dining", "note": "coffee"}' \
+  -H "Idempotency-Key: coffee-2026-09-28" \
+  -d '{"actor": "money", "amount": 14.50, "category": "Food & dining", "note": "coffee"}' \
   https://<your-host>/spend
 ```
 
@@ -267,7 +286,9 @@ curl -sS -H "Authorization: Bearer $JARVIS_API_TOKEN" \
 | `next_action` | string, ≤ 300 characters |
 | `notes` | string, ≤ 2000 characters |
 
-Every write body also needs `actor` (1–40 characters: letters, digits, `.`, `_`, `-`). Optional `reason` (≤ 300 characters) is stored in the audit log only. Any other key is rejected. JSON `null` is rejected; send `""` to clear a text field.
+Every write body also needs `actor` (1–40 characters: letters, digits, `.`, `_`, `-`). Optional `reason` (≤ 300 characters) is stored in the audit log only. Any other key is rejected. JSON `null` is rejected; send `""` to clear a text field. The body must be a JSON object.
+
+If `term_context.json` exists but cannot be parsed, the write returns 409 and does not replace the file. Each successful write copies the previous file to `term_context.json.bak` first.
 
 `GET /flags` nags about the mentor only when `awaiting_response` is true and `last_contact` is 7 or more days ago. A check-in dated today clears that nag even if a reply is still outstanding.
 

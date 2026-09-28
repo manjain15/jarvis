@@ -792,12 +792,15 @@ def generate_brief(prompt):
 
     Retries overload (529) up to 5 times. If stop_reason is max_tokens, retries
     once with a shorter instruction. A second cutoff is closed with
-    salvage_truncated_html instead of raising max_tokens. Does not send email.
+    salvage_truncated_html instead of raising max_tokens. If that retry raises
+    for any other reason, the first truncated body is salvaged and returned
+    so a brief still goes out. Does not send email.
     """
     import time
     client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
     prompt_in_use = prompt
     retried_short = False
+    first_truncated = None
 
     for attempt in range(5):
         try:
@@ -810,19 +813,30 @@ def generate_brief(prompt):
             if message.stop_reason == "max_tokens" and not retried_short and attempt < 4:
                 print("    ⚠️  Brief hit max_tokens — retrying once, shorter")
                 retried_short = True
+                first_truncated = body
                 prompt_in_use = prompt + _SHORT_BRIEF_SUFFIX
                 continue
             if message.stop_reason == "max_tokens":
                 print("    ⚠️  Brief still truncated — sending a closed fallback")
                 return salvage_truncated_html(body)
             return body
-        except anthropic.APIStatusError as e:
-            if e.status_code == 529 and attempt < 4:
+        except Exception as e:
+            overloaded = (
+                isinstance(e, anthropic.APIStatusError)
+                and e.status_code == 529
+                and attempt < 4
+            )
+            if overloaded:
                 wait = 10 * (2 ** attempt)  # 10s, 20s, 40s, 80s
                 print(f"    ⚠️  Claude overloaded, retrying in {wait}s (attempt {attempt + 1}/5)...")
                 time.sleep(wait)
-            else:
-                raise
+                continue
+            if first_truncated is not None:
+                print("    ⚠️  Brief retry failed — sending the earlier truncated reply")
+                return salvage_truncated_html(first_truncated)
+            raise
+    if first_truncated is not None:
+        return salvage_truncated_html(first_truncated)
     raise RuntimeError("brief generation failed")
 
 
