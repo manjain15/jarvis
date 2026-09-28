@@ -40,4 +40,9 @@ if systemctl is-enabled --quiet jarvis-spend.service 2>/dev/null; then
     sudo systemctl restart jarvis-spend.service
 fi
 
+if systemctl is-enabled --quiet jarvis-agent-api.service 2>/dev/null; then
+    echo "→ Restarting jarvis-agent-api.service"
+    sudo systemctl restart jarvis-agent-api.service
+fi
+
 echo "✓ Deploy complete"

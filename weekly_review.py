@@ -615,7 +615,6 @@ def run_weekly_review():
     print("✍️   Generating review with Claude...")
     review_html = generate_weekly_review(health, workouts, finance, memory, job_links, term, study_plan)
 
-    print("📤  Sending review...")
     # Append intelligence report to the review
     if INTELLIGENCE_AVAILABLE:
         try:
@@ -626,6 +625,14 @@ def run_weekly_review():
         except Exception as e:
             print(f"⚠️   Intelligence report failed: {e}")
 
+    try:
+        from agent_api import save_latest_brief
+        save_latest_brief(review_html, kind="weekly", label=week_label)
+        print("💾  Review saved for the agent API")
+    except Exception as e:
+        print(f"⚠️   Could not save review for the agent API: {e}")
+
+    print("📤  Sending review...")
     send_weekly_review(review_html, week_label)
 
     print(f"\n✅  Weekly review sent. Check your inbox.\n")

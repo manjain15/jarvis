@@ -468,7 +468,14 @@ def _handle_tool_call(block):
         return f"⚠️ Tool call failed: {e}"
 
 
-def chat_with_claude(user_message, static_context, recent_turns):
+def chat_with_claude(user_message, static_context, recent_turns, tools=None):
+    """
+    Reply to one message with Jarvis's conversational brain.
+
+    tools: Claude tool definitions. None (the default) uses the Telegram
+    proposal tools, which can queue profile/term changes and start remote-work
+    sessions. Pass [] for a read-only reply with no side effects.
+    """
     client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
 
     messages = []
@@ -477,10 +484,13 @@ def chat_with_claude(user_message, static_context, recent_turns):
         messages.append({"role": role, "content": turn["text"]})
     messages.append({"role": "user", "content": user_message})
 
-    response = client.messages.create(
-        model=MODEL,
-        max_tokens=600,
-        system=[
+    if tools is None:
+        tools = PROPOSAL_TOOLS
+
+    request = {
+        "model": MODEL,
+        "max_tokens": 600,
+        "system": [
             {"type": "text", "text": SYSTEM_PROMPT},
             {
                 "type": "text",
@@ -488,9 +498,12 @@ def chat_with_claude(user_message, static_context, recent_turns):
                 "cache_control": {"type": "ephemeral"},
             },
         ],
-        messages=messages,
-        tools=PROPOSAL_TOOLS,
-    )
+        "messages": messages,
+    }
+    if tools:
+        request["tools"] = tools
+
+    response = client.messages.create(**request)
 
     # Tool calls are resolved deterministically in code, not via a second
     # Claude round trip — keeps cost flat at one call per message.
