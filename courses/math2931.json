@@ -4,26 +4,34 @@
   "term": "26T3",
   "lectures": null,
   "labs_due": null,
-  "source": "stub topics \u2014 no full outline in repo (Downloads/MATH2931Quiz1ProblemSet.pdf only). Assessment dates from term_context (Manav-provided 14 Sep 2026).",
+  "source": "Official UNSW course outline T3 2026. In-class Test W4 20%; Assignment 2 W9 20%; Final exam exam-period 60%. Dates for ICT/A2 from Manav.",
   "schedule": [
     {
       "week": 1,
-      "topics": [],
+      "topics": [
+        "Introduction to supervised learning; training/test loss; linear algebra review"
+      ],
       "assessments": []
     },
     {
       "week": 2,
-      "topics": [],
+      "topics": [
+        "Coordinate-Descent Method and Cross-Validation"
+      ],
       "assessments": []
     },
     {
       "week": 3,
-      "topics": [],
+      "topics": [
+        "Linear and Normal Linear Model; Properties of the Gaussian Distribution"
+      ],
       "assessments": []
     },
     {
       "week": 4,
-      "topics": [],
+      "topics": [
+        "PRESS, GCV, and In-Sample Risk for Selecting Features"
+      ],
       "assessments": [
         "In-class Test (20%) \u2014 due Wed 7 Oct 2026"
       ]
@@ -54,13 +62,15 @@
       "week": 9,
       "topics": [],
       "assessments": [
-        "Assignment 2 (60%) \u2014 due Wed 11 Nov 2026"
+        "Assignment 2 (20%) \u2014 due Wed 11 Nov 2026"
       ]
     },
     {
       "week": 10,
       "topics": [],
-      "assessments": []
+      "assessments": [
+        "Final exam (60%) \u2014 exam period (date TBC)"
+      ]
     }
   ]
 }

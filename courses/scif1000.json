@@ -4,12 +4,16 @@
   "term": "26T3",
   "lectures": null,
   "labs_due": null,
-  "source": "partial \u2014 Week 2 topics from Downloads/Week 2 slides SCIF1000.pdf; other weeks stub (no outline in repo). Course name on slides: Skills in Science.",
+  "source": "Official UNSW course outline T3 2026 + Week 2 slides (post-class due 13 Oct). Presentation 15%; post-class 20%; pre-class quizzes 35%; in-class group 30%.",
   "schedule": [
     {
       "week": 1,
       "topics": [],
-      "assessments": []
+      "assessments": [
+        "Pre-class quiz (part of 35%)",
+        "In-class group workbook (part of 30%)",
+        "Post-class written task (part of 20%)"
+      ]
     },
     {
       "week": 2,
@@ -19,24 +23,36 @@
         "Multiple hypothesis testing pitfalls"
       ],
       "assessments": [
-        "Post-class written task (week 2)",
+        "Post-class written task (week 2) \u2014 due 13 Oct 2026 (slides)",
         "Pre-class module + quiz for week 3 (closes at start of week 3 class)"
       ]
     },
     {
       "week": 3,
       "topics": [],
-      "assessments": []
+      "assessments": [
+        "Pre-class quiz (part of 35%)",
+        "In-class group workbook (part of 30%)",
+        "Post-class written task (part of 20%)"
+      ]
     },
     {
       "week": 4,
       "topics": [],
-      "assessments": []
+      "assessments": [
+        "Pre-class quiz (part of 35%)",
+        "In-class group workbook (part of 30%)",
+        "Post-class written task (part of 20%)"
+      ]
     },
     {
       "week": 5,
       "topics": [],
-      "assessments": []
+      "assessments": [
+        "Pre-class quiz (part of 35%)",
+        "In-class group workbook (part of 30%)",
+        "Post-class written task (part of 20%)"
+      ]
     },
     {
       "week": 6,
@@ -48,22 +64,36 @@
     {
       "week": 7,
       "topics": [],
-      "assessments": []
+      "assessments": [
+        "Pre-class quiz (part of 35%)",
+        "In-class group workbook (part of 30%)",
+        "Post-class written task (part of 20%)"
+      ]
     },
     {
       "week": 8,
       "topics": [],
-      "assessments": []
+      "assessments": [
+        "Pre-class quiz (part of 35%)",
+        "In-class group workbook (part of 30%)",
+        "Post-class written task (part of 20%)"
+      ]
     },
     {
       "week": 9,
       "topics": [],
-      "assessments": []
+      "assessments": [
+        "Pre-class quiz (part of 35%)",
+        "In-class group workbook (part of 30%)",
+        "Post-class written task (part of 20%)"
+      ]
     },
     {
       "week": 10,
       "topics": [],
-      "assessments": []
+      "assessments": [
+        "Presentation (15%) \u2014 Week 10 16\u201322 Nov 2026"
+      ]
     }
   ]
 }

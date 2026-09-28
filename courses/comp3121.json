@@ -3,33 +3,43 @@
   "name": "Algorithm Design and Analysis",
   "term": "26T3",
   "lectures": null,
-  "labs_due": null,
-  "source": "stub \u2014 no full course outline in repo (only Downloads/COMP3121_9101-1.2.pdf exercise sheet). Fill week topics from Moodle.",
+  "labs_due": "Formatif portfolio tasks across weeks 1-5, 7-9",
+  "source": "Official UNSW course outline T3 2026 (courseoutlines.unsw.edu.au). Portfolio 60% + Final Exam 40%.",
   "schedule": [
     {
       "week": 1,
       "topics": [],
-      "assessments": []
+      "assessments": [
+        "Portfolio tasks (ongoing, part of 60%)"
+      ]
     },
     {
       "week": 2,
       "topics": [],
-      "assessments": []
+      "assessments": [
+        "Portfolio tasks (ongoing, part of 60%)"
+      ]
     },
     {
       "week": 3,
       "topics": [],
-      "assessments": []
+      "assessments": [
+        "Portfolio tasks (ongoing, part of 60%)"
+      ]
     },
     {
       "week": 4,
       "topics": [],
-      "assessments": []
+      "assessments": [
+        "Portfolio tasks (ongoing, part of 60%)"
+      ]
     },
     {
       "week": 5,
       "topics": [],
-      "assessments": []
+      "assessments": [
+        "Portfolio tasks (ongoing, part of 60%)"
+      ]
     },
     {
       "week": 6,
@@ -41,22 +51,30 @@
     {
       "week": 7,
       "topics": [],
-      "assessments": []
+      "assessments": [
+        "Portfolio tasks (ongoing, part of 60%)"
+      ]
     },
     {
       "week": 8,
       "topics": [],
-      "assessments": []
+      "assessments": [
+        "Portfolio tasks (ongoing, part of 60%)"
+      ]
     },
     {
       "week": 9,
       "topics": [],
-      "assessments": []
+      "assessments": [
+        "Portfolio tasks (ongoing, part of 60%)"
+      ]
     },
     {
       "week": 10,
       "topics": [],
-      "assessments": []
+      "assessments": [
+        "Exam revision (Final Exam 40% in exam period)"
+      ]
     }
   ]
 }
