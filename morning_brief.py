@@ -136,6 +136,18 @@ except Exception:
         return {"savings_goal": 35000.00, "savings_deadline": "2027-01-01",
                 "monthly_income": 2800.00, "monthly_budget": 300.00, "weekly_budget": 75.00}
 
+try:
+    from followups import maybe_draft_mentor_followup
+    FOLLOWUPS_AVAILABLE = True
+except Exception:
+    FOLLOWUPS_AVAILABLE = False
+
+try:
+    from jarvis_calendar import sync_term_deadlines_to_calendar
+    CALENDAR_SYNC_AVAILABLE = True
+except Exception:
+    CALENDAR_SYNC_AVAILABLE = False
+
 # ── Course schedule — this week's topics from course outlines (optional) ──────
 try:
     import course_schedule
@@ -156,6 +168,7 @@ except Exception:
 SCOPES = [
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/gmail.send",
+    "https://www.googleapis.com/auth/gmail.compose",  # drafts.create for mentor follow-ups
     "https://www.googleapis.com/auth/calendar.readonly",
     "https://www.googleapis.com/auth/calendar.events",  # write: create/update events
     "https://www.googleapis.com/auth/tasks",             # Google Tasks read/write
@@ -199,17 +212,28 @@ def get_google_credentials():
     Returns valid Google credentials.
     - First run: opens browser for OAuth consent
     - Subsequent runs: loads saved token and refreshes if expired
+    - If SCOPES grew (e.g. gmail.compose) beyond what the token grants,
+      falls back to the token's existing scopes so cron never opens a browser.
+      Re-run --setup to grant new scopes.
     """
     creds = None
 
     if TOKEN_FILE.exists():
-        creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
+        try:
+            creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
+        except Exception:
+            creds = Credentials.from_authorized_user_file(TOKEN_FILE)
 
-    # If no valid credentials, kick off the OAuth flow
+    # If no valid credentials, refresh or kick off the OAuth flow
     if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            # Token expired — silently refresh it
-            creds.refresh(Request())
+        if creds and creds.refresh_token:
+            try:
+                creds.refresh(Request())
+            except Exception:
+                # Likely new scopes not yet granted — use whatever the token has
+                creds = Credentials.from_authorized_user_file(TOKEN_FILE)
+                if creds.expired and creds.refresh_token:
+                    creds.refresh(Request())
         else:
             # First time — open browser for login
             if not CREDS_FILE.exists():
@@ -376,7 +400,7 @@ def fetch_emails(creds, hours_back=18, max_emails=15):
 #   - Your recent emails
 #   - Exact instructions for how to write the brief
 
-def build_prompt(profile_text, events, emails, today_str, checkin_summary=None, fitbit_data=None, finance_data=None, hevy_data=None, memory_data=None, jobs_data=None, overload_data=None, pokemon_data=None, tasks_data=None, daily_plan=None, proposals_text=None, term_data=None, term_flags=None, course_topics=None, academic_alerts=None):
+def build_prompt(profile_text, events, emails, today_str, checkin_summary=None, fitbit_data=None, finance_data=None, hevy_data=None, memory_data=None, jobs_data=None, overload_data=None, pokemon_data=None, tasks_data=None, daily_plan=None, proposals_text=None, term_data=None, term_flags=None, course_topics=None, academic_alerts=None, followup_note=None):
     """
     Constructs the full prompt sent to Claude.
     Returns a string.
@@ -510,6 +534,8 @@ def build_prompt(profile_text, events, emails, today_str, checkin_summary=None, 
     else:
         flags_section = "  No urgent term/internship/mentor flags today."
 
+    followup_section = followup_note if followup_note else "  No mentor follow-up draft created today."
+
     academic_section = academic_alerts if academic_alerts else "  No assessment or revision alerts right now."
 
     _fin_goals = get_finance_goals()
@@ -601,6 +627,10 @@ TERM FLAGS (urgent nudges for today):
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 {flags_section}
 
+MENTOR FOLLOW-UP DRAFT:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+{followup_section}
+
 ────────────────────────────
 YOUR TASK — write their morning briefing:
 ────────────────────────────
@@ -636,7 +666,8 @@ follow up on a stale app, or prep for an upcoming interview. Be direct, not gent
 
 <h3>🤝 Mentor & network</h3>
 [Use TERM CONTEXT mentor data. If awaiting_response and >=7 days have passed, push them to follow
-up today with a specific draft line. Otherwise, one line on mentor status. Omit if nothing actionable.]
+up today. If MENTOR FOLLOW-UP DRAFT below says a Gmail draft is waiting, tell Manav the subject
+and that it's in Drafts (do not invent a draft). Otherwise, one line on mentor status. Omit if nothing actionable.]
 
 <h3>💪 Health check</h3>
 [Use FITBIT DATA for sleep/HR/steps AND HEVY DATA for workout tracking AND PROGRESSIVE OVERLOAD data. State actual sleep vs 7-8hr target, resting HR. Confirm if they trained yesterday, any PBs. State today's split. If any lifts are stalling, flag the most important one. 5-6 lines max, direct and specific.]
@@ -948,9 +979,34 @@ def run_brief():
         except Exception:
             pass
 
+    # Mentor follow-up draft (Gmail draft only — never sent). Fail-soft.
+    followup_note = None
+    if FOLLOWUPS_AVAILABLE:
+        try:
+            info = maybe_draft_mentor_followup(creds)
+            followup_note = info.get("brief_note")
+            if info.get("drafted"):
+                print(f"✉️   Mentor follow-up draft created: {info.get('subject')}")
+            elif info.get("brief_note"):
+                print(f"✉️   Mentor draft already waiting: {info.get('subject')}")
+        except Exception as e:
+            print(f"⚠️   Mentor follow-up draft skipped: {e}")
+
+    # Sync assessment/fee deadlines to Google Calendar (once per day). Fail-soft.
+    if CALENDAR_SYNC_AVAILABLE:
+        try:
+            sync_result = sync_term_deadlines_to_calendar(force=False)
+            if sync_result.get("skipped"):
+                print(f"📅  Calendar deadline sync: {sync_result['skipped']}")
+            else:
+                print(f"📅  Calendar deadlines synced: {sync_result.get('synced', 0)} "
+                      f"(removed {sync_result.get('removed', 0)})")
+        except Exception as e:
+            print(f"⚠️   Calendar deadline sync skipped: {e}")
+
     # Build prompt and call Claude
     print("🧠  Generating brief with Claude...")
-    prompt = build_prompt(profile_text, events, emails, today_str, checkin_summary, fitbit_data, finance_data, hevy_data, memory_data, jobs_data, overload_data, pokemon_data, tasks_data, daily_plan, proposals_text, term_data, term_flags, course_topics, academic_alerts)
+    prompt = build_prompt(profile_text, events, emails, today_str, checkin_summary, fitbit_data, finance_data, hevy_data, memory_data, jobs_data, overload_data, pokemon_data, tasks_data, daily_plan, proposals_text, term_data, term_flags, course_topics, academic_alerts, followup_note)
     brief  = generate_brief(prompt)
     print("✅  Brief generated")
 

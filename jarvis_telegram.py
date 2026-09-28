@@ -767,6 +767,25 @@ def cmd_mentor(args):
         return f"⚠️ {e}"
 
 
+def cmd_draftmentor(args):
+    """/draftmentor [--force] — create a Gmail draft follow-up if mentor is silent long enough."""
+    force = any(a in ("--force", "force") for a in (args or []))
+    try:
+        from followups import maybe_draft_mentor_followup
+        info = maybe_draft_mentor_followup(force=force)
+    except Exception as e:
+        return f"⚠️ Draft failed: {e}"
+    if info.get("drafted"):
+        subject = info.get("subject") or ""
+        to_addr = info.get("to") or ""
+        link = info.get("link") or ""
+        return f'✅ Draft created in Gmail: "{subject}" → {to_addr}\n{link}'
+    note = info.get("brief_note")
+    skipped = info.get("skipped") or "nothing to draft"
+    if note:
+        return f"⏭ {skipped}\n{note}"
+    return f"⏭ {skipped}"
+
 def cmd_remote(args):
     """/remote project instruction... [--pr] — kicks off a headless remote-work session."""
     open_pr = "--pr" in args
@@ -898,6 +917,7 @@ COMMANDS = {
     "/done":       cmd_done,
     "/internship": cmd_internship,
     "/mentor":     cmd_mentor,
+    "/draftmentor": cmd_draftmentor,
     "/log":        cmd_log,
     "/status":     cmd_status,
     "/remote":       cmd_remote,

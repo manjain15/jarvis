@@ -1,0 +1,62 @@
+{
+  "code": "COMP3121",
+  "name": "Algorithm Design and Analysis",
+  "term": "26T3",
+  "lectures": null,
+  "labs_due": null,
+  "source": "stub \u2014 no full course outline in repo (only Downloads/COMP3121_9101-1.2.pdf exercise sheet). Fill week topics from Moodle.",
+  "schedule": [
+    {
+      "week": 1,
+      "topics": [],
+      "assessments": []
+    },
+    {
+      "week": 2,
+      "topics": [],
+      "assessments": []
+    },
+    {
+      "week": 3,
+      "topics": [],
+      "assessments": []
+    },
+    {
+      "week": 4,
+      "topics": [],
+      "assessments": []
+    },
+    {
+      "week": 5,
+      "topics": [],
+      "assessments": []
+    },
+    {
+      "week": 6,
+      "topics": [
+        "Flexibility Week"
+      ],
+      "assessments": []
+    },
+    {
+      "week": 7,
+      "topics": [],
+      "assessments": []
+    },
+    {
+      "week": 8,
+      "topics": [],
+      "assessments": []
+    },
+    {
+      "week": 9,
+      "topics": [],
+      "assessments": []
+    },
+    {
+      "week": 10,
+      "topics": [],
+      "assessments": []
+    }
+  ]
+}

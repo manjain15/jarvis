@@ -108,6 +108,25 @@ Never write outside `/Users/manavjain/jarvis/`.
 
 ---
 
+
+---
+
+## Newer behaviours (auto)
+
+- **Mentor follow-up drafts** (`followups.py`): morning brief calls
+  `maybe_draft_mentor_followup` when `get_mentor_flags` would fire (~7 days
+  silent + awaiting_response). Creates a Gmail *draft* only (never sends).
+  Idempotent via `data/mentor_followup_draft.json`. Needs `mentor.email` in
+  `term_context.json` and `gmail.compose` scope (`python morning_brief.py --setup`
+  if drafts 403). Manual: `python followups.py --draft` or Telegram `/draftmentor`.
+
+- **Calendar deadline sync** (`jarvis_calendar.sync_term_deadlines_to_calendar`):
+  upserts `[Jarvis]` all-day events for assessment dues + any fee/census dates
+  already in term_context (`deadlines[]` or `term.census_date` / `fee_due` /
+  `fee_deadline`). IDs in `data/calendar_sync.json`. Runs once/day from morning
+  brief; also on assessment apply / mark-done / new term. Manual:
+  `python jarvis_calendar.py --sync-deadlines`.
+
 ## Git
 
 - Never include Co-Authored-By lines (or any AI attribution) in commit messages.

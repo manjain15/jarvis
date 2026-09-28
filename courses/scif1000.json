@@ -1,0 +1,69 @@
+{
+  "code": "SCIF1000",
+  "name": "Skills in Science",
+  "term": "26T3",
+  "lectures": null,
+  "labs_due": null,
+  "source": "partial \u2014 Week 2 topics from Downloads/Week 2 slides SCIF1000.pdf; other weeks stub (no outline in repo). Course name on slides: Skills in Science.",
+  "schedule": [
+    {
+      "week": 1,
+      "topics": [],
+      "assessments": []
+    },
+    {
+      "week": 2,
+      "topics": [
+        "Coming up with good questions",
+        "Designing a scientific question for challenge work",
+        "Multiple hypothesis testing pitfalls"
+      ],
+      "assessments": [
+        "Post-class written task (week 2)",
+        "Pre-class module + quiz for week 3 (closes at start of week 3 class)"
+      ]
+    },
+    {
+      "week": 3,
+      "topics": [],
+      "assessments": []
+    },
+    {
+      "week": 4,
+      "topics": [],
+      "assessments": []
+    },
+    {
+      "week": 5,
+      "topics": [],
+      "assessments": []
+    },
+    {
+      "week": 6,
+      "topics": [
+        "Flexibility Week"
+      ],
+      "assessments": []
+    },
+    {
+      "week": 7,
+      "topics": [],
+      "assessments": []
+    },
+    {
+      "week": 8,
+      "topics": [],
+      "assessments": []
+    },
+    {
+      "week": 9,
+      "topics": [],
+      "assessments": []
+    },
+    {
+      "week": 10,
+      "topics": [],
+      "assessments": []
+    }
+  ]
+}
