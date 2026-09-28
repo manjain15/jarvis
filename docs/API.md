@@ -1,8 +1,9 @@
 # Jarvis agent API
 
-A small HTTP API so an external assistant can query Jarvis. It is a separate
-process from the localhost dashboard (`dashboard.py`, port 5555, no auth) and
-from the iPhone spend logger (`live_spend.py`, port 5556, its own token).
+A small HTTP API so an external assistant can query Jarvis and correct stale
+mentor or internship records. It is a separate process from the localhost
+dashboard (`dashboard.py`, port 5555, no auth) and from the iPhone spend
+logger (`live_spend.py`, port 5556, its own token).
 
 The agent API reuses existing code:
 
@@ -14,6 +15,9 @@ The agent API reuses existing code:
 - `GET /brief` returns the last morning brief or Sunday weekly review saved by
   those jobs.
 - `POST /spend` calls `live_spend.log_spend` (the Back Tap path is unchanged).
+- `PATCH /mentor`, `PATCH /internships`, and `POST /internships` write
+  `term_context.json` through `term_context.mutate_context`, the same locked
+  atomic update the flags read on the next request.
 
 ## Auth
 
@@ -153,6 +157,108 @@ curl -sS -H "Authorization: Bearer $JARVIS_API_TOKEN" \
 ```
 
 `{"ok": true, "logged": "$14.50 Food & dining", "week_total": "$14.50", "entry": {...}}`
+
+### Correct the mentor record
+
+`PATCH /mentor`. Partial update. At least one of these fields is required:
+
+| Field | Rule |
+| --- | --- |
+| `last_contact` | `YYYY-MM-DD`, not in the future (Australia/Sydney), year ≥ 2000 |
+| `last_topic` | string, ≤ 300 characters |
+| `awaiting_response` | JSON boolean |
+| `next_action` | string, ≤ 300 characters |
+| `notes` | string, ≤ 2000 characters |
+
+Every write body also needs `actor` (1–40 characters: letters, digits, `.`, `_`, `-`). Optional `reason` (≤ 300 characters) is stored in the audit log only. Any other key is rejected. JSON `null` is rejected; send `""` to clear a text field.
+
+`GET /flags` nags about the mentor only when `awaiting_response` is true and `last_contact` is 7 or more days ago. A check-in dated today clears that nag even if a reply is still outstanding.
+
+```
+curl -sS -X PATCH \
+  -H "Authorization: Bearer $JARVIS_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "actor": "career",
+    "reason": "Emailed on 7 Sep and sent a check-in on 28 Sep",
+    "last_contact": "2026-09-28",
+    "last_topic": "Check-in after the 7 Sep email",
+    "awaiting_response": true,
+    "next_action": "Wait for a reply to the 28 Sep check-in",
+    "notes": "Original note 7 Sep; check-in sent 28 Sep"
+  }' \
+  https://<your-host>/mentor
+```
+
+`{"ok": true, "changed": true, "audit_logged": true, "changes": {"last_contact": {"old": "...", "new": "2026-09-28"}}, "mentor": {...}}`
+
+`changed` is false when every supplied value already matches. That response is not audited. `name` and `email` on the mentor record are left as they are.
+
+### Correct an internship
+
+`PATCH /internships`. `company` is required (matched case-insensitively). `role` is required only when that company has more than one application. At least one of `status`, `last_update`, `next_action`, `notes`.
+
+`status` must be exactly one of: `applied`, `OA_completed`, `interview`, `offer`, `rejected`, `withdrawn`.
+
+`last_update` uses the same date rules as `last_contact`. The stored value is the date you send.
+
+Stale nag: a row whose status is not `offer`, `rejected`, or `withdrawn`, and whose `last_update` is 14 or more days ago. `OA_completed` also nags on every brief until the status changes, including when `last_update` is recent. `offer`, `rejected`, and `withdrawn` stop the nag.
+
+```
+curl -sS -X PATCH \
+  -H "Authorization: Bearer $JARVIS_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "actor": "career",
+    "company": "Canva",
+    "reason": "Application already handled",
+    "status": "rejected",
+    "last_update": "2026-09-28",
+    "next_action": "No further action",
+    "notes": "Closed out from email"
+  }' \
+  https://<your-host>/internships
+```
+
+`{"ok": true, "changed": true, "audit_logged": true, "changes": {...}, "internship": {...}}`
+
+Unknown company is `404`. Two rows for the same company, with no `role`, is `409` and the file is not modified. Other fields already on the row (for example a careers URL) are preserved.
+
+### Add an internship application
+
+`POST /internships`. Required: `company`, `role`, `status`. Optional: `last_update` (defaults to today in Australia/Sydney), `next_action`, `notes`. Same `actor` / `reason` rules. A duplicate company and role (case-insensitive) is `409`.
+
+```
+curl -sS -X POST \
+  -H "Authorization: Bearer $JARVIS_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "actor": "career",
+    "company": "Atlassian",
+    "role": "Software Engineering Intern",
+    "status": "applied",
+    "last_update": "2026-09-28",
+    "next_action": "Wait for OA",
+    "notes": "Applied via the careers site"
+  }' \
+  https://<your-host>/internships
+```
+
+`201 {"ok": true, "changed": true, "audit_logged": true, "internship": {...}}`
+
+The new row is what `GET /flags` and `GET /context` read on the next request. No process restart.
+
+### Why writes apply immediately
+
+`term_updates.py` and `update_profile.py` queue overnight Claude suggestions until you approve them (`python term_updates.py`, or Telegram `/approve`). `proposal_trust.py` only counts those approve/reject decisions. Nothing reads the score to allow or block a write.
+
+These routes are the external-agent equivalent of `/mentor` and `/internship`: the caller already holds `JARVIS_API_TOKEN`. They apply in the same locked `mutate_context` path, with a stricter allowlist than the Telegram command's free-form `key=value` pairs. A queued correction would leave `GET /flags` stale until a manual review, so the write hits `term_context.json` directly. The accountability record is the audit log below.
+
+Bad input returns `400 {"error": "..."}` and leaves `term_context.json` unchanged. A failed audit append also leaves the context file unchanged.
+
+### Audit log
+
+Each real change appends one JSON line to `data/agent_api_audit.jsonl` on the VPS (the `data/` directory is gitignored). The line has `ts`, `actor`, `action` (`mentor_update`, `internship_update`, or `internship_add`), `target`, `reason`, `old`, and `new`. There is no HTTP route for the log.
 
 ## Laptop sync scripts
 
