@@ -29,22 +29,69 @@ The agent API reuses existing code:
 Every route, including `/health`, requires:
 
 ```
-Authorization: Bearer $JARVIS_API_TOKEN
+Authorization: Bearer <token>
 ```
 
-Set `JARVIS_API_TOKEN` in the VPS `.env` (the file is gitignored). Generate one with:
+`JARVIS_API_TOKEN` is the legacy owner token. It can call every route. The audit
+log records actor `owner`. A field named `actor` in a JSON body is ignored.
+
+`JARVIS_API_TOKENS` is optional per-bot access:
+
+```
+JARVIS_API_TOKENS=career:<token>,study:<token>,money:<token>
+```
+
+The name before the colon is the audit actor. Each name needs an entry in
+`BOT_ROUTE_ALLOWLIST` in `agent_api.py` (edit that dict to change what a bot
+can call):
+
+| Actor | Routes |
+| --- | --- |
+| `career` | `/health`, `/flags`, `/context`, `/mentor`, `/internships` |
+| `study` | `/health`, `/flags`, `/context` |
+| `money` | `/health`, `/flags`, `/spend`, `/finance` and `/finance/*` |
+| `owner` (`JARVIS_API_TOKEN`) | every route |
+
+`/ask`, `/memory/search`, and `/brief` stay on the owner token unless you add
+them to a bot's tuple in `BOT_ROUTE_ALLOWLIST`. A known route outside the
+caller's list is `403 {"error": "forbidden"}`.
+
+Generate a token with:
 
 ```
 python -c "import secrets; print(secrets.token_urlsafe(32))"
 ```
 
-The process refuses to start if the variable is empty. Comparison is constant-time.
-A missing or wrong token gets `401 {"error": "unauthorized"}`.
+Every configured token must be at least 32 characters. The process refuses to
+start, with that length in the error, if `JARVIS_API_TOKEN` or any bot token
+is shorter, if none are set, or if two entries share one secret. Comparison
+is constant-time. A missing or wrong token gets `401 {"error": "unauthorized"}`.
+An unknown path with a valid token is `404`. The wrong method on an allowed
+path is `405`. Five failed auths in a minute from one client IP get
+`429 {"error": "too many attempts"}`.
+
+Behind Tailscale Funnel the client IP is the `X-Forwarded-For` value
+tailscaled sets (from `Tailscale-Ingress-Src`). That header is trusted only
+from a loopback peer. Funnel does not send `Tailscale-User-*` on public
+traffic.
+
+`/ask` is capped at 30 calls per Sydney day and `/memory/search` at 100.
+Past the cap the response is `429 {"error": "daily limit reached"}`. The
+counter is `data/agent_api_usage.json`. Request bodies larger than 16384
+bytes get `413 {"error": "request body too large"}`.
+
+The three bots can keep using `JARVIS_API_TOKEN` until per-bot tokens are set.
+After they are set, give each bot only its own token.
 
 ## Binding and how to expose it
 
 `agent_api.py --serve` listens on **127.0.0.1:5557** only (`JARVIS_API_PORT` overrides
-the port). Nothing on the public internet can reach it until you put TLS in front.
+the port), using **waitress**. If waitress is not installed the process says so
+and falls back to the Werkzeug development server. That fallback's access log
+drops the query string, so `?q=` does not land in the journal. Install waitress
+in the VPS venv (`venv/bin/pip install -r requirements-vps.txt`, which pins
+`waitress==3.0.2`) before relying on the process. Nothing on the public
+internet can reach it until you put TLS in front.
 
 Pick one:
 
@@ -73,8 +120,22 @@ curl -sS -H "Authorization: Bearer $JARVIS_API_TOKEN" http://127.0.0.1:5557/heal
 ```
 
 `jarvis-agent-api` is in `ALWAYS_ON` in `watchdog.py` (and in Telegram `/status`).
-A dead process raises a Telegram alert on the next watchdog run. That check
-starts once this code is on the VPS; the unit itself is already enabled.
+The watchdog also GETs `http://127.0.0.1:5557/health` with the API token, so a
+process that is active but not answering still alerts. The same problem set
+alerts once; a later run stays quiet until the set changes. `--daily` always
+sends. A dead process raises a Telegram alert on the next watchdog run.
+
+`deploy/vps-deploy.sh` restarts this service when sudo allows it, and it
+tries to copy changed unit files. Unit installs stay manual. Do not grant
+the deploy user `sudo cp`: that user can edit the unit files, and a wildcard
+copy rule is root access. The sudoers file to install with
+`sudo visudo -f /etc/sudoers.d/jarvis-deploy` should only allow
+`systemctl restart jarvis-agent-api.service` and `systemctl daemon-reload`.
+If sudo denies a step, the script logs the manual command and keeps going.
+The unit enables
+`NoNewPrivileges`, `ProtectSystem=strict`, and `PrivateTmp`, and it can still
+write `data/`, `term_context.json` (and its `.tmp` / `.lock` / `.bak`
+siblings), `token.json` (Google refresh), and `memory/mem0_db`.
 
 ## Endpoints
 
@@ -250,12 +311,9 @@ the sheet cannot be read, `inventory` is `null` and `inventory_error` is
 
 ### Log a spend
 
-Same categories and validation as the Back Tap logger. `actor` is optional
-here (it stays required on mentor and internship writes). When it is omitted,
-the audit line uses `owner` if the request presented the legacy
-`JARVIS_API_TOKEN`, and `unknown` for any other token. A per-bot token map
-can replace `default_spend_actor` without changing this route. A non-blank
-`actor` is stored as sent, with the same character rules as the other writes.
+Same categories and validation as the Back Tap logger. The audit actor is
+the bearer token (`owner` for `JARVIS_API_TOKEN`, or the bot name). A body
+`actor` is accepted and ignored, including when it is missing or malformed.
 Optional `reason` is stored in the audit log only. A successful call appends
 `data/agent_api_audit.jsonl` with `action: "spend"`.
 
@@ -272,7 +330,7 @@ object. An array, string, number, or invalid body is 400.
 curl -sS -H "Authorization: Bearer $JARVIS_API_TOKEN" \
   -H "Content-Type: application/json" \
   -H "Idempotency-Key: coffee-2026-09-28" \
-  -d '{"actor": "money", "amount": 14.50, "category": "Food & dining", "note": "coffee"}' \
+  -d '{"amount": 14.50, "category": "Food & dining", "note": "coffee"}' \
   https://<your-host>/spend
 ```
 
@@ -290,7 +348,7 @@ curl -sS -H "Authorization: Bearer $JARVIS_API_TOKEN" \
 | `next_action` | string, ≤ 300 characters |
 | `notes` | string, ≤ 2000 characters |
 
-Every write body also needs `actor` (1–40 characters: letters, digits, `.`, `_`, `-`). Optional `reason` (≤ 300 characters) is stored in the audit log only. Any other key is rejected. JSON `null` is rejected; send `""` to clear a text field. The body must be a JSON object.
+The audit `actor` is the token (`owner`, or the bot name from `JARVIS_API_TOKENS`). A body field named `actor` is accepted and ignored, including when it is missing or malformed. Optional `reason` (≤ 300 characters) is stored in the audit log only. Any other key is rejected. JSON `null` is rejected; send `""` to clear a text field. The body must be a JSON object.
 
 If `term_context.json` exists but cannot be parsed, the write returns 409 and does not replace the file. Each successful write copies the previous file to `term_context.json.bak` first.
 
@@ -301,7 +359,6 @@ curl -sS -X PATCH \
   -H "Authorization: Bearer $JARVIS_API_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
-    "actor": "career",
     "reason": "Emailed on 7 Sep and sent a check-in on 28 Sep",
     "last_contact": "2026-09-28",
     "last_topic": "Check-in after the 7 Sep email",
@@ -331,7 +388,6 @@ curl -sS -X PATCH \
   -H "Authorization: Bearer $JARVIS_API_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
-    "actor": "career",
     "company": "Canva",
     "reason": "Application already handled",
     "status": "rejected",
@@ -348,14 +404,13 @@ Unknown company is `404`. Two rows for the same company, with no `role`, is `409
 
 ### Add an internship application
 
-`POST /internships`. Required: `company`, `role`, `status`. Optional: `last_update` (defaults to today in Australia/Sydney), `next_action`, `notes`. Same `actor` / `reason` rules. A duplicate company and role (case-insensitive) is `409`.
+`POST /internships`. Required: `company`, `role`, `status`. Optional: `last_update` (defaults to today in Australia/Sydney), `next_action`, `notes`. Optional `reason` follows the mentor rules. The audit actor is the token. A duplicate company and role (case-insensitive) is `409`.
 
 ```
 curl -sS -X POST \
   -H "Authorization: Bearer $JARVIS_API_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
-    "actor": "career",
     "company": "Atlassian",
     "role": "Software Engineering Intern",
     "status": "applied",

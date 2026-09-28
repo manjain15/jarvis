@@ -10,6 +10,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 os.environ.setdefault("YOUR_EMAIL", "test@example.com")
@@ -23,9 +24,15 @@ import pytest
 import agent_api
 import term_context
 
+# Keep daily /ask and /memory/search counters out of the repo data/ directory.
+agent_api.USAGE_FILE = Path(tempfile.mkdtemp(prefix="jarvis-api-usage-")) / "usage.json"
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TOKEN = "test-token"
 AUTH = {"Authorization": f"Bearer {TOKEN}"}
+CAREER_TOKEN = "c" * 40
+STUDY_TOKEN = "s" * 40
+MONEY_TOKEN = "m" * 40
 
 _IPV4 = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 
@@ -48,6 +55,7 @@ def test_bearer_matches_and_rejects():
 
 def test_refuses_to_start_without_token(monkeypatch):
     monkeypatch.delenv("JARVIS_API_TOKEN", raising=False)
+    monkeypatch.delenv("JARVIS_API_TOKENS", raising=False)
     with pytest.raises(RuntimeError):
         agent_api.create_app()
 
@@ -73,13 +81,20 @@ def test_every_route_requires_bearer():
         ("get", "/finance/subscriptions", None),
         ("get", "/finance/reselling", None),
     ]
-    for method, path, body in checks:
+    for index, (method, path, body) in enumerate(checks):
         kwargs = {}
         if body is not None:
             kwargs["json"] = body
-        naked = getattr(client, method)(path, **kwargs)
+        # A distinct client IP per call, or the failed-auth throttle returns 429.
+        naked = getattr(client, method)(
+            path, headers={"X-Forwarded-For": f"203.0.113.{index}"}, **kwargs,
+        )
         assert naked.status_code == 401, path
-        bad = getattr(client, method)(path, headers={"Authorization": "Bearer no"}, **kwargs)
+        bad = getattr(client, method)(
+            path,
+            headers={"Authorization": "Bearer no", "X-Forwarded-For": f"198.51.100.{index}"},
+            **kwargs,
+        )
         assert bad.status_code == 401, path
 
 
@@ -339,7 +354,7 @@ def test_mentor_patch_clears_flag_and_writes_audit(tmp_path, monkeypatch):
     lines = _audit_lines(tmp_path)
     assert len(lines) == 1
     entry = lines[0]
-    assert entry["actor"] == "career"
+    assert entry["actor"] == "owner"
     assert entry["action"] == "mentor_update"
     assert entry["target"] == {"record": "mentor"}
     assert entry["reason"] == "Check-in sent today"
@@ -460,7 +475,7 @@ def test_add_internship_is_visible_to_flags(tmp_path, monkeypatch):
     added = [line for line in audit if line["action"] == "internship_add"]
     assert added[0]["old"] is None
     assert added[0]["new"]["company"] == "Dolby"
-    assert added[0]["actor"] == "career"
+    assert added[0]["actor"] == "owner"
     assert added[0]["reason"] == "Record was missing"
 
 
@@ -470,8 +485,6 @@ def test_write_validation_and_misses_leave_the_file_unchanged(tmp_path, monkeypa
     client = _client()
     future = (datetime.datetime.now(agent_api.TIMEZONE).date() + datetime.timedelta(days=2)).isoformat()
     cases = [
-        ("patch", "/mentor", {"last_contact": _today().isoformat()}),
-        ("patch", "/mentor", {"actor": "career agent", "awaiting_response": False}),
         ("patch", "/mentor", {"actor": "career", "email": "other@example.com", "notes": "x"}),
         ("patch", "/mentor", {"actor": "career", "awaiting_response": "false"}),
         ("patch", "/mentor", {"actor": "career", "last_contact": "28/09/2026"}),
@@ -589,6 +602,316 @@ def test_audit_failure_leaves_term_context_unchanged(tmp_path, monkeypatch):
     assert not (tmp_path / "agent_api_audit.jsonl").exists()
 
 
+def _bearer(token):
+    return {"Authorization": f"Bearer {token}"}
+
+
+def _bots():
+    """One app with the legacy owner token plus the three bot tokens."""
+    return agent_api.create_app(
+        token=TOKEN,
+        bot_tokens={
+            "career": CAREER_TOKEN,
+            "study": STUDY_TOKEN,
+            "money": MONEY_TOKEN,
+        },
+    ).test_client()
+
+
+class _Clock:
+    def __init__(self):
+        self.now = 1000.0
+
+    def __call__(self):
+        return self.now
+
+
+def test_per_bot_scopes(monkeypatch):
+    monkeypatch.setattr(agent_api, "get_flags_payload", lambda: {"flags": [], "academic_alerts": [], "unavailable": []})
+    monkeypatch.setattr(agent_api, "get_context_payload", lambda days_ahead: {"days_ahead": days_ahead})
+    monkeypatch.setattr(agent_api, "get_finance_payload", lambda *args, **kwargs: {"unavailable": []})
+    monkeypatch.setattr(agent_api, "get_spending_payload", lambda *args, **kwargs: {"available": False})
+    monkeypatch.setattr(agent_api, "log_spend_entry", lambda *args, **kwargs: {"ok": True})
+    monkeypatch.setattr(agent_api, "answer_question", lambda question: "ok")
+    monkeypatch.setattr(
+        agent_api, "search_memory_payload",
+        lambda query, limit=5: {"query": query, "limit": limit, "text": ""},
+    )
+    client = _bots()
+    career = _bearer(CAREER_TOKEN)
+    study = _bearer(STUDY_TOKEN)
+    money = _bearer(MONEY_TOKEN)
+
+    assert client.get("/health", headers=career).status_code == 200
+    assert client.get("/flags", headers=career).status_code == 200
+    assert client.get("/context", headers=career).status_code == 200
+    assert client.post("/ask", headers=career, json={"question": "hi"}).status_code == 403
+    assert client.get("/finance", headers=career).status_code == 403
+    assert client.get("/finance/spending", headers=career).status_code == 403
+    assert client.get("/memory/search", headers=career, query_string={"q": "x"}).status_code == 403
+    assert client.get("/brief", headers=career).status_code == 403
+
+    assert client.get("/health", headers=study).status_code == 200
+    assert client.get("/context", headers=study).status_code == 200
+    assert client.patch("/mentor", headers=study, json={"notes": "x"}).status_code == 403
+    assert client.get("/finance", headers=study).status_code == 403
+
+    assert client.get("/health", headers=money).status_code == 200
+    assert client.get("/flags", headers=money).status_code == 200
+    assert client.get("/finance", headers=money).status_code == 200
+    assert client.get("/finance/spending", headers=money).status_code == 200
+    spent = client.post("/spend", headers=money, json={"amount": 1, "category": "Other"})
+    assert spent.status_code == 200
+    assert client.get("/context", headers=money).status_code == 403
+    assert client.post("/ask", headers=money, json={"question": "hi"}).status_code == 403
+
+    assert client.post("/ask", headers=AUTH, json={"question": "hi"}).status_code == 200
+    remembered = client.get("/memory/search", headers=AUTH, query_string={"q": "mentor"})
+    assert remembered.status_code == 200
+    brief = client.get("/brief", headers=AUTH)
+    assert brief.status_code == 404
+    assert brief.get_json()["error"] == "no brief saved yet"
+
+
+def test_bot_explicitly_granted_ask(monkeypatch):
+    monkeypatch.setitem(
+        agent_api.BOT_ROUTE_ALLOWLIST,
+        "career",
+        agent_api.BOT_ROUTE_ALLOWLIST["career"] + ("/ask",),
+    )
+    monkeypatch.setattr(agent_api, "answer_question", lambda question: "granted")
+    client = _bots()
+    res = client.post("/ask", headers=_bearer(CAREER_TOKEN), json={"question": "hi"})
+    assert res.status_code == 200
+    assert res.get_json()["answer"] == "granted"
+
+
+def test_audit_actor_comes_from_the_token(tmp_path, monkeypatch):
+    _seed(tmp_path, monkeypatch, mentor=_mentor(), internships=[_canva()])
+    client = _bots()
+    res = client.patch("/mentor", headers=_bearer(CAREER_TOKEN), json={
+        "actor": "study",
+        "awaiting_response": False,
+        "reason": "they replied",
+    })
+    assert res.status_code == 200
+    assert _audit_lines(tmp_path)[-1]["actor"] == "career"
+    assert _audit_lines(tmp_path)[-1]["reason"] == "they replied"
+
+    ignored = client.patch("/mentor", headers=_bearer(CAREER_TOKEN), json={
+        "actor": "career agent",
+        "notes": "still waiting",
+    })
+    assert ignored.status_code == 200
+    assert _audit_lines(tmp_path)[-1]["actor"] == "career"
+
+    owner = client.patch("/mentor", headers=AUTH, json={
+        "actor": "career",
+        "next_action": "none",
+    })
+    assert owner.status_code == 200
+    assert _audit_lines(tmp_path)[-1]["actor"] == "owner"
+
+
+def test_unknown_path_and_wrong_method():
+    client = _bots()
+    career = _bearer(CAREER_TOKEN)
+    assert client.get("/no-such-route", headers=career).status_code == 404
+    assert client.get("/no-such-route").status_code == 401
+    assert client.post("/health", headers=career).status_code == 405
+    assert client.post("/health").status_code == 401
+    # GET /ask is the wrong method, and career is not allowed to call /ask.
+    assert client.get("/ask", headers=career).status_code == 403
+    assert client.post("/health", headers=AUTH).status_code == 405
+    assert client.get("/no-such-route", headers=AUTH).status_code == 404
+
+
+def test_failed_auth_throttle(monkeypatch):
+    clock = _Clock()
+    monkeypatch.setattr(agent_api, "_monotonic", clock)
+    client = _client()
+    ip_a = {"X-Forwarded-For": "203.0.113.10"}
+    ip_b = {"X-Forwarded-For": "203.0.113.11"}
+    for _ in range(agent_api.AUTH_FAILURES_PER_MINUTE):
+        res = client.get("/health", headers={"Authorization": "Bearer no", **ip_a})
+        assert res.status_code == 401
+    blocked = client.get("/health", headers={**AUTH, **ip_a})
+    assert blocked.status_code == 429
+    assert blocked.get_json()["error"] == "too many attempts"
+    other = client.get("/health", headers={"Authorization": "Bearer no", **ip_b})
+    assert other.status_code == 401
+    clock.now += agent_api.AUTH_WINDOW_SECONDS + 1
+    assert client.get("/health", headers={**AUTH, **ip_a}).status_code == 200
+
+
+def test_forwarded_for_is_ignored_off_loopback(monkeypatch):
+    clock = _Clock()
+    monkeypatch.setattr(agent_api, "_monotonic", clock)
+    client = _client()
+    for i in range(agent_api.AUTH_FAILURES_PER_MINUTE):
+        res = client.get(
+            "/health",
+            headers={"Authorization": "Bearer no", "X-Forwarded-For": f"203.0.113.{i}"},
+            environ_base={"REMOTE_ADDR": "198.51.100.7"},
+        )
+        assert res.status_code == 401, i
+    blocked = client.get(
+        "/health",
+        headers={"Authorization": "Bearer no", "X-Forwarded-For": "203.0.113.99"},
+        environ_base={"REMOTE_ADDR": "198.51.100.7"},
+    )
+    assert blocked.status_code == 429
+    fresh = client.get(
+        "/health",
+        headers={"Authorization": "Bearer no", "X-Forwarded-For": "203.0.113.0"},
+    )
+    assert fresh.status_code == 401
+
+
+def test_client_ip_trusts_forwarded_for_only_from_loopback():
+    assert agent_api.client_ip_from_headers("127.0.0.1", "203.0.113.5, 10.0.0.1") == "203.0.113.5"
+    assert agent_api.client_ip_from_headers("::1", "2001:db8::1") == "2001:db8::1"
+    assert agent_api.client_ip_from_headers("198.51.100.2", "203.0.113.5") == "198.51.100.2"
+    assert agent_api.client_ip_from_headers("127.0.0.1", "") == "127.0.0.1"
+
+
+def test_daily_cap_defaults():
+    assert agent_api.ASK_DAILY_CAP == 30
+    assert agent_api.MEMORY_DAILY_CAP == 100
+    assert agent_api.MIN_TOKEN_LENGTH >= 32
+    assert agent_api.AUTH_FAILURES_PER_MINUTE == 5
+    assert agent_api.MAX_BODY_BYTES == 16384
+
+
+def test_daily_caps_return_429(monkeypatch, tmp_path):
+    monkeypatch.setattr(agent_api, "USAGE_FILE", tmp_path / "usage.json")
+    monkeypatch.setattr(agent_api, "ASK_DAILY_CAP", 2)
+    monkeypatch.setattr(agent_api, "MEMORY_DAILY_CAP", 1)
+    monkeypatch.setattr(agent_api, "answer_question", lambda question: "ok")
+    monkeypatch.setattr(
+        agent_api, "search_memory_payload",
+        lambda query, limit=5: {"query": query, "limit": limit, "text": "t"},
+    )
+    client = _client()
+    assert client.post("/ask", headers=AUTH, json={"question": "a"}).status_code == 200
+    assert client.post("/ask", headers=AUTH, json={"question": "b"}).status_code == 200
+    blocked = client.post("/ask", headers=AUTH, json={"question": "c"})
+    assert blocked.status_code == 429
+    assert blocked.get_json()["error"] == "daily limit reached"
+    assert client.post("/ask", headers=AUTH, json={"question": "  "}).status_code == 400
+
+    assert client.get("/memory/search", headers=AUTH, query_string={"q": "mentor"}).status_code == 200
+    limited = client.get("/memory/search", headers=AUTH, query_string={"q": "again"})
+    assert limited.status_code == 429
+
+    monkeypatch.setattr(agent_api, "_usage_day", lambda: "2099-01-01")
+    assert client.post("/ask", headers=AUTH, json={"question": "new day"}).status_code == 200
+
+
+def test_forbidden_ask_does_not_spend_the_daily_cap(monkeypatch, tmp_path):
+    monkeypatch.setattr(agent_api, "USAGE_FILE", tmp_path / "usage.json")
+    monkeypatch.setattr(agent_api, "ASK_DAILY_CAP", 1)
+    monkeypatch.setattr(agent_api, "answer_question", lambda question: "ok")
+    client = _bots()
+    assert client.post("/ask", headers=_bearer(CAREER_TOKEN), json={"question": "hi"}).status_code == 403
+    assert client.post("/ask", headers=AUTH, json={"question": "hi"}).status_code == 200
+
+
+def test_body_limit_returns_413(monkeypatch):
+    monkeypatch.setattr(agent_api, "answer_question", lambda question: "ok")
+    client = _client()
+    small = client.post(
+        "/ask",
+        data=b'{"question":"hi"}',
+        headers={**AUTH, "Content-Type": "application/json"},
+    )
+    assert small.status_code == 200
+    big = client.post(
+        "/ask",
+        data=b"x" * (agent_api.MAX_BODY_BYTES + 1),
+        headers={**AUTH, "Content-Type": "application/json"},
+    )
+    assert big.status_code == 413
+    assert big.get_json()["error"] == "request body too large"
+    exact = client.post(
+        "/ask",
+        data=b"y" * agent_api.MAX_BODY_BYTES,
+        headers={**AUTH, "Content-Type": "application/json"},
+    )
+    assert exact.status_code != 413
+
+
+def test_configured_tokens_must_be_long_and_known(monkeypatch):
+    monkeypatch.delenv("JARVIS_API_TOKENS", raising=False)
+    monkeypatch.setenv("JARVIS_API_TOKEN", "x" * 31)
+    with pytest.raises(RuntimeError, match="32"):
+        agent_api.create_app()
+
+    monkeypatch.setenv("JARVIS_API_TOKEN", "o" * 32)
+    monkeypatch.setenv("JARVIS_API_TOKENS", "nope:" + ("n" * 32))
+    with pytest.raises(RuntimeError, match="allowlist"):
+        agent_api.create_app()
+
+    monkeypatch.setenv("JARVIS_API_TOKENS", "career:" + ("c" * 32) + ",study:" + ("c" * 32))
+    with pytest.raises(RuntimeError, match="duplicate"):
+        agent_api.create_app()
+
+    monkeypatch.setenv("JARVIS_API_TOKEN", "o" * 32)
+    monkeypatch.setenv("JARVIS_API_TOKENS", "career:" + ("o" * 32))
+    with pytest.raises(RuntimeError, match="different secrets"):
+        agent_api.create_app()
+
+    monkeypatch.setenv("JARVIS_API_TOKENS", "career:" + ("c" * 32))
+    client = agent_api.create_app().test_client()
+    assert client.get("/health", headers={"Authorization": "Bearer " + ("c" * 32)}).status_code == 200
+    assert client.post("/ask", headers={"Authorization": "Bearer " + ("c" * 32)}, json={"question": "hi"}).status_code == 403
+    empty = client.post("/ask", headers={"Authorization": "Bearer " + ("o" * 32)}, json={})
+    assert empty.status_code == 400
+
+
+def test_redact_request_target_drops_query():
+    assert agent_api.redact_request_target("/memory/search?q=secret+token") == "/memory/search"
+    assert agent_api.redact_request_target("/health") == "/health"
+    assert agent_api.redact_request_target("") == "/"
+
+
+def test_serve_prefers_waitress_and_redacts_fallback(monkeypatch):
+    app = agent_api.create_app(token=TOKEN)
+    calls = {}
+
+    def fake_waitress(*args, **kwargs):
+        calls["waitress"] = kwargs
+
+    monkeypatch.setattr(agent_api, "_import_waitress", lambda: fake_waitress)
+    agent_api.serve_app(app, "127.0.0.1", 9)
+    assert calls["waitress"]["host"] == "127.0.0.1"
+    assert calls["waitress"]["port"] == 9
+
+    def boom():
+        raise ImportError("no waitress")
+
+    monkeypatch.setattr(agent_api, "_import_waitress", boom)
+
+    def fake_run(**kwargs):
+        calls["fallback"] = kwargs
+
+    monkeypatch.setattr(app, "run", fake_run)
+    agent_api.serve_app(app, "127.0.0.1", 9)
+    assert calls["fallback"]["host"] == "127.0.0.1"
+    handler = calls["fallback"]["request_handler"]
+    assert handler.__name__ == "RedactedRequestHandler"
+
+
+def test_deploy_scripts_have_valid_bash():
+    for rel in (
+        "deploy/vps-deploy.sh",
+        "deploy/sync-data-down.sh",
+        "deploy/sync-finance-up.sh",
+        "deploy/load-vps-target.sh",
+    ):
+        subprocess.check_call(["bash", "-n", str(REPO_ROOT / rel)])
+
+
 def test_malformed_authorization_headers():
     client = _client()
     assert client.get("/health", headers={"Authorization": "Bearer"}).status_code == 401
@@ -676,18 +999,36 @@ def test_api_write_copies_a_backup_and_missing_file_still_creates(tmp_path, monk
     assert not (fresh / "term_context.json.bak").exists()
 
 
-def test_spend_actor_defaults_and_stays_overridable():
-    assert agent_api.default_spend_actor("legacy-secret", "legacy-secret") == "owner"
-    assert agent_api.default_spend_actor("bot-secret", "legacy-secret") == "unknown"
-    assert agent_api.default_spend_actor("", "legacy-secret") == "unknown"
-    assert agent_api.default_spend_actor(None, None) == "unknown"
-    assert agent_api.spend_actor(
-        {"amount": 1, "actor": "  money  "}, "bot-secret", "legacy-secret",
-    ) == "money"
-    assert agent_api.spend_actor({"amount": 1}, "bot-secret", "legacy-secret") == "unknown"
-    assert agent_api.spend_actor({}, "legacy-secret", "legacy-secret") == "owner"
-    with pytest.raises(ValueError):
-        agent_api.spend_actor({"actor": "has spaces"}, "legacy-secret", "legacy-secret")
+def test_spend_actor_comes_from_the_token(tmp_path, monkeypatch):
+    """Body actor is ignored. Legacy token audits as owner; a money token as money."""
+    import live_spend
+    monkeypatch.setattr(live_spend, "SPEND_FILE", tmp_path / "live_spend.jsonl")
+    monkeypatch.setattr(agent_api, "AUDIT_FILE", tmp_path / "agent_api_audit.jsonl")
+    client = _bots()
+
+    omitted = client.post(
+        "/spend",
+        json={"amount": 3, "category": "Other", "note": "bus"},
+        headers=AUTH,
+    )
+    assert omitted.status_code == 200
+    assert _audit_lines(tmp_path)[-1]["actor"] == "owner"
+
+    money = client.post(
+        "/spend",
+        json={"actor": "career", "amount": 2, "category": "Other", "note": "tram"},
+        headers=_bearer(MONEY_TOKEN),
+    )
+    assert money.status_code == 200
+    assert _audit_lines(tmp_path)[-1]["actor"] == "money"
+
+    malformed = client.post(
+        "/spend",
+        json={"actor": "has spaces", "amount": 1, "category": "Other", "note": "walk"},
+        headers=_bearer(MONEY_TOKEN),
+    )
+    assert malformed.status_code == 200
+    assert _audit_lines(tmp_path)[-1]["actor"] == "money"
 
 
 def test_spend_without_actor_audits_the_legacy_owner(tmp_path, monkeypatch):
@@ -727,7 +1068,7 @@ def test_spend_records_actor_audits_and_dedupes(tmp_path, monkeypatch):
 
     audit = _audit_lines(tmp_path)
     assert len(audit) == 1
-    assert audit[0]["actor"] == "money"
+    assert audit[0]["actor"] == "owner"
     assert audit[0]["action"] == "spend"
     assert audit[0]["reason"] == "back tap"
     assert audit[0]["idempotency_key"] == "spend-001"
@@ -752,8 +1093,9 @@ def test_spend_records_actor_audits_and_dedupes(tmp_path, monkeypatch):
     bad_actor = client.post("/spend", json={
         "actor": "has spaces", "amount": 1, "category": "Other",
     }, headers=AUTH)
-    assert bad_actor.status_code == 400
-    assert len((tmp_path / "live_spend.jsonl").read_text().splitlines()) == 2
+    assert bad_actor.status_code == 200
+    assert _audit_lines(tmp_path)[-1]["actor"] == "owner"
+    assert len((tmp_path / "live_spend.jsonl").read_text().splitlines()) == 3
 
     path = tmp_path / "agent_api_audit.jsonl"
     aged = []
@@ -770,9 +1112,9 @@ def test_spend_records_actor_audits_and_dedupes(tmp_path, monkeypatch):
         "note": "coffee",
     }, headers=AUTH)
     assert again.status_code == 200
-    assert len((tmp_path / "live_spend.jsonl").read_text().splitlines()) == 3
+    assert len((tmp_path / "live_spend.jsonl").read_text().splitlines()) == 4
 
     keyed = client.post("/spend", json=body, headers=headers)
     assert keyed.status_code == 200
     assert keyed.get_json() == first.get_json()
-    assert len((tmp_path / "live_spend.jsonl").read_text().splitlines()) == 3
+    assert len((tmp_path / "live_spend.jsonl").read_text().splitlines()) == 4

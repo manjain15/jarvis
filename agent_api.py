@@ -15,11 +15,18 @@ This is a separate process from dashboard.py and live_spend.py:
 
 Every route, including /health, requires:
 
-    Authorization: Bearer $JARVIS_API_TOKEN
+    Authorization: Bearer <token>
 
-The token is read from the environment (repo .env via config.load_dotenv).
-Comparison is constant-time. The server binds 127.0.0.1 only — expose it
-with HTTPS (Cloudflare Tunnel, Tailscale Serve, or a reverse proxy).
+JARVIS_API_TOKEN is the legacy owner token (full access, audit actor
+"owner"). JARVIS_API_TOKENS is optional per-bot access, formatted
+"career:<token>,study:<token>,money:<token>". The audit actor comes from
+the token that matched. An "actor" field in the body is ignored.
+Each bot's routes are BOT_ROUTE_ALLOWLIST. A route outside that list is 403.
+
+Tokens must be at least 32 characters. Comparison is constant-time.
+Failed auth is throttled per client IP (Tailscale Funnel sets
+X-Forwarded-For). /ask and /memory/search have daily caps.
+The server binds 127.0.0.1 only — expose it with HTTPS (Tailscale Funnel).
 Do not open the port on the public firewall. See docs/API.md.
 
 COST:
@@ -34,17 +41,22 @@ COST:
   A weekly Money check should call GET /finance, not poll it.
 
 SETUP:
-  Add JARVIS_API_TOKEN to .env (long random string).
-  python agent_api.py --serve
+  Add JARVIS_API_TOKEN to .env (32+ characters). Optionally add
+  JARVIS_API_TOKENS. python agent_api.py --serve
+  Production listens with waitress. If waitress is missing, the process
+  falls back to the Werkzeug server and says so.
 """
 
 import argparse
+import contextvars
 import datetime
 import hashlib
 import hmac
 import json
 import os
 import re
+import threading
+import time
 from pathlib import Path
 
 import pytz
@@ -65,6 +77,28 @@ _INTERNSHIP_ADD_KEYS = {"actor", "reason", "company", "role", "status", "last_up
 
 TIMEZONE     = pytz.timezone(config.TIMEZONE)
 DEFAULT_PORT = 5557
+
+# Per-bot route allowlist. A prefix matches that path and anything under it
+# (/finance covers /finance/spending). /ask, /memory/search, and /brief are
+# not listed: only the legacy JARVIS_API_TOKEN (actor "owner") can call them,
+# unless you add the path to a bot here.
+BOT_ROUTE_ALLOWLIST = {
+    "career": ("/health", "/flags", "/context", "/mentor", "/internships"),
+    "study": ("/health", "/flags", "/context"),
+    "money": ("/health", "/finance", "/spend", "/flags"),
+}
+OWNER_ACTOR = "owner"
+MIN_TOKEN_LENGTH = 32
+AUTH_FAILURES_PER_MINUTE = 5
+AUTH_WINDOW_SECONDS = 60
+ASK_DAILY_CAP = 30
+MEMORY_DAILY_CAP = 100
+MAX_BODY_BYTES = 16384
+USAGE_FILE = DATA_DIR / "agent_api_usage.json"
+
+# Audit actor for the current request. Set from the matched token, never
+# from the JSON body.
+_actor_var = contextvars.ContextVar("jarvis_api_actor", default=None)
 
 _TAG_RE = re.compile(r"<[^>]+>")
 _BREAK_RE = re.compile(r"<br\s*/?>|</p>|</h[1-6]>|</li>|</div>|</tr>", re.I)
@@ -95,18 +129,6 @@ def api_token():
     return os.environ.get("JARVIS_API_TOKEN", "").strip()
 
 
-def _presented_bearer(authorization_header):
-    """Return the Bearer credential, or '' when the header is not Bearer.
-
-    Does not check the secret. Spend uses it only to choose a default actor.
-    """
-    header = authorization_header or ""
-    parts = header.split(None, 1)
-    if len(parts) != 2 or parts[0].lower() != "bearer":
-        return ""
-    return parts[1].strip()
-
-
 def bearer_matches(authorization_header, expected):
     """
     Return True when the Authorization header carries expected as a Bearer token.
@@ -128,6 +150,311 @@ def bearer_matches(authorization_header, expected):
         hashlib.sha256(provided.encode("utf-8")).digest(),
         hashlib.sha256(expected.encode("utf-8")).digest(),
     )
+
+
+def _check_token_length(token, label):
+    """Refuse a configured secret shorter than MIN_TOKEN_LENGTH."""
+    if len(token) < MIN_TOKEN_LENGTH:
+        raise RuntimeError(
+            f"{label} must be at least {MIN_TOKEN_LENGTH} characters "
+            f"(got {len(token)}). Generate one with: "
+            'python -c "import secrets; print(secrets.token_urlsafe(32))"'
+        )
+
+
+class Principal:
+    """One bearer token and the routes it may call."""
+
+    def __init__(self, actor, token, full_access=False):
+        self.actor = actor
+        self.token = token
+        self.full_access = bool(full_access)
+
+    def allows(self, path):
+        """Return True when this principal may call path."""
+        if self.full_access:
+            return True
+        for prefix in BOT_ROUTE_ALLOWLIST.get(self.actor, ()):
+            if path == prefix or path.startswith(prefix + "/"):
+                return True
+        return False
+
+
+def parse_bot_tokens(raw):
+    """
+    Parse JARVIS_API_TOKENS ('career:<token>,study:<token>,money:<token>').
+
+    Names must already be keys of BOT_ROUTE_ALLOWLIST. Tokens must not
+    contain a comma (the list separator). Raises RuntimeError on a bad entry.
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        return []
+    found = []
+    seen_actors = set()
+    seen_tokens = set()
+    known = ", ".join(sorted(BOT_ROUTE_ALLOWLIST))
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if ":" not in part:
+            raise RuntimeError(
+                "JARVIS_API_TOKENS entries must look like career:<token> "
+                f"(problem near {part[:24]!r})"
+            )
+        actor, token = part.split(":", 1)
+        actor = actor.strip()
+        token = token.strip()
+        if actor not in BOT_ROUTE_ALLOWLIST:
+            raise RuntimeError(
+                f"JARVIS_API_TOKENS actor {actor!r} has no route allowlist. "
+                f"Known actors: {known}. Add it to BOT_ROUTE_ALLOWLIST first."
+            )
+        if not _ACTOR_RE.fullmatch(actor):
+            raise RuntimeError(f"JARVIS_API_TOKENS actor {actor!r} is not a valid name")
+        if actor in seen_actors:
+            raise RuntimeError(f"JARVIS_API_TOKENS lists {actor!r} more than once")
+        _check_token_length(token, f"JARVIS_API_TOKENS {actor}")
+        if token in seen_tokens:
+            raise RuntimeError("JARVIS_API_TOKENS contains a duplicate token")
+        seen_actors.add(actor)
+        seen_tokens.add(token)
+        found.append((actor, token))
+    return found
+
+
+def load_principals_from_env():
+    """
+    Build principals from JARVIS_API_TOKEN and JARVIS_API_TOKENS.
+
+    The legacy token is actor 'owner' with every route. Per-bot tokens use
+    BOT_ROUTE_ALLOWLIST. Raises RuntimeError when nothing is set, a token
+    is shorter than 32 characters, or two entries share a secret.
+    """
+    legacy = api_token()
+    bots = parse_bot_tokens(os.environ.get("JARVIS_API_TOKENS", ""))
+    if not legacy and not bots:
+        raise RuntimeError(
+            "JARVIS_API_TOKEN is not set. Set it in .env (32+ characters), "
+            "or set JARVIS_API_TOKENS for per-bot access."
+        )
+    principals = []
+    if legacy:
+        _check_token_length(legacy, "JARVIS_API_TOKEN")
+        principals.append(Principal(OWNER_ACTOR, legacy, full_access=True))
+    legacy_token = legacy
+    for actor, token in bots:
+        if legacy_token and token == legacy_token:
+            raise RuntimeError(
+                "JARVIS_API_TOKEN matches a JARVIS_API_TOKENS entry; use different secrets"
+            )
+        principals.append(Principal(actor, token, full_access=False))
+    return principals
+
+
+def match_principal(authorization_header, principals):
+    """
+    Return the principal whose token matches Authorization, or None.
+
+    Every configured token is compared so timing does not reveal which
+    entry matched.
+    """
+    found = None
+    for principal in principals:
+        matched = bearer_matches(authorization_header, principal.token)
+        if matched and found is None:
+            found = principal
+    return found
+
+
+def _is_loopback(ip):
+    """True for 127.0.0.0/8 and ::1, including IPv4-mapped IPv6."""
+    host = (ip or "").strip().lower()
+    if host.startswith("::ffff:"):
+        host = host[7:]
+    if host == "::1":
+        return True
+    if host.startswith("127."):
+        return True
+    return False
+
+
+def client_ip_from_headers(remote_addr, x_forwarded_for):
+    """
+    Address used by the failed-auth throttle.
+
+    Tailscale Funnel's HTTP reverse proxy sets X-Forwarded-For to the public
+    client (tailscaled addProxyForwardedHeaders, sourced from
+    Tailscale-Ingress-Src). It also sets Tailscale-Funnel-Request: ?1.
+    Tailscale-User-* identity headers are not set on Funnel traffic, and
+    Tailscale-Ingress-Src is not forwarded to this process.
+
+    X-Forwarded-For is trusted only when the socket peer is loopback, which
+    is the Funnel proxy. The server binds 127.0.0.1.
+    """
+    remote = (remote_addr or "").strip()
+    if _is_loopback(remote):
+        forwarded = (x_forwarded_for or "").split(",")[0].strip()
+        if forwarded:
+            return forwarded
+    return remote or "unknown"
+
+
+def _monotonic():
+    """Clock for the auth-failure window. Tests replace this."""
+    return time.monotonic()
+
+
+class AuthThrottle:
+    """About five failed auths per minute per client IP."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._fails = {}
+
+    def too_many(self, ip):
+        """Return True when this IP is already at the failure cap."""
+        now = _monotonic()
+        with self._lock:
+            recent = self._prune(ip, now)
+            return len(recent) >= AUTH_FAILURES_PER_MINUTE
+
+    def record_failure(self, ip):
+        """Count one failed authentication for ip."""
+        now = _monotonic()
+        with self._lock:
+            recent = self._prune(ip, now)
+            recent.append(now)
+            self._fails[ip] = recent
+            self._drop_stale(now)
+
+    def _prune(self, ip, now):
+        return [stamp for stamp in self._fails.get(ip, ()) if now - stamp < AUTH_WINDOW_SECONDS]
+
+    def _drop_stale(self, now):
+        if len(self._fails) < 1000:
+            return
+        stale = [ip for ip, stamps in self._fails.items() if not any(now - stamp < AUTH_WINDOW_SECONDS for stamp in stamps)]
+        for ip in stale:
+            del self._fails[ip]
+
+
+def _usage_day():
+    """Sydney calendar day for the daily counters."""
+    return datetime.datetime.now(TIMEZONE).date().isoformat()
+
+
+def _read_usage(path):
+    """Load the quota file, or {} when it is missing or corrupt."""
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeError):
+        print(f"⚠️  daily quota file {path.name} is unreadable; starting a new counter")
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return data
+
+
+def consume_daily_quota(kind):
+    """
+    Count one expensive call for today.
+
+    kind is 'ask' or 'memory_search'. Returns False when today's counter is
+    already at the cap (the caller responds 429 and does not call out).
+    The file is data/agent_api_usage.json. A new Sydney day resets it.
+    """
+    caps = {"ask": ASK_DAILY_CAP, "memory_search": MEMORY_DAILY_CAP}
+    if kind not in caps:
+        raise ValueError(f"unknown quota {kind}")
+    cap = caps[kind]
+    path = USAGE_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    today = _usage_day()
+    with file_lock(path):
+        data = _read_usage(path)
+        if data.get("date") != today:
+            data = {"date": today, "ask": 0, "memory_search": 0}
+        try:
+            current = int(data.get(kind) or 0)
+        except (TypeError, ValueError):
+            current = 0
+        if current >= cap:
+            return False
+        data[kind] = current + 1
+        data["date"] = today
+        data.setdefault("ask", 0)
+        data.setdefault("memory_search", 0)
+        atomic_write_json(path, data)
+    return True
+
+
+def _request_actor():
+    """Audit actor for this request, taken from the bearer token."""
+    actor = _actor_var.get()
+    if not actor:
+        raise RuntimeError("authenticated actor is not set")
+    return actor
+
+
+def redact_request_target(target):
+    """Drop the query string so access logs cannot store ?q= searches."""
+    if not target:
+        return "/"
+    return str(target).split("?", 1)[0]
+
+
+def _import_waitress():
+    """Return waitress.serve, or raise ImportError when it is not installed."""
+    from waitress import serve as waitress_serve
+    return waitress_serve
+
+
+def _redacted_handler_class():
+    """Werkzeug handler whose access log omits the query string."""
+    from werkzeug.serving import WSGIRequestHandler
+
+    class RedactedRequestHandler(WSGIRequestHandler):
+        """Access log without ?q= or any other query string."""
+
+        def log_request(self, code="-", size="-"):
+            path = redact_request_target(self.path)
+            self.log(
+                "info",
+                '"%s %s %s" %s %s',
+                self.command,
+                path,
+                self.request_version,
+                code,
+                size,
+            )
+
+    return RedactedRequestHandler
+
+
+def serve_app(app, host, port):
+    """
+    Listen on host:port.
+
+    Uses waitress when it is installed. Otherwise falls back to Flask's
+    development server, says so on stdout, and strips query strings from
+    the access log so /memory/search?q=... does not reach the journal.
+    """
+    try:
+        waitress_serve = _import_waitress()
+    except ImportError:
+        print(
+            "⚠️  waitress is not installed; using the Werkzeug development server. "
+            "Install it in the VPS venv before relying on this process: "
+            "venv/bin/pip install 'waitress==3.0.2'"
+        )
+        app.run(host=host, port=port, request_handler=_redacted_handler_class())
+        return
+    print(f"\n🤖  Jarvis agent API (waitress) on http://{host}:{port}\n")
+    waitress_serve(app, host=host, port=port, threads=4, ident="jarvis-agent-api")
 
 
 def html_to_text(html):
@@ -180,6 +507,26 @@ def load_latest_brief():
     return data
 
 
+def _clean_question(question):
+    """Return a stripped question, or raise ValueError when it should be a 400."""
+    question = str(question or "").strip()
+    if not question:
+        raise ValueError("question is required")
+    if len(question) > 4000:
+        raise ValueError("question must be 4000 characters or fewer")
+    return question
+
+
+def _clean_memory_query(query):
+    """Return a stripped memory query, or raise ValueError when it should be a 400."""
+    query = str(query or "").strip()
+    if not query:
+        raise ValueError("q is required")
+    if len(query) > 500:
+        raise ValueError("q must be 500 characters or fewer")
+    return query
+
+
 def answer_question(question):
     """
     Answer one free-text question with the Telegram conversational brain.
@@ -188,11 +535,7 @@ def answer_question(question):
     queue profile edits or start a coding session. Raises ValueError on a
     blank or oversized question. One Anthropic call per question.
     """
-    question = str(question or "").strip()
-    if not question:
-        raise ValueError("question is required")
-    if len(question) > 4000:
-        raise ValueError("question must be 4000 characters or fewer")
+    question = _clean_question(question)
     from jarvis_telegram import build_static_context, chat_with_claude
     return chat_with_claude(question, build_static_context(), [], tools=[])
 
@@ -298,11 +641,7 @@ def search_memory_payload(query, limit=5):
 
     Raises ValueError on a blank or oversized query. One embedding call per search.
     """
-    query = str(query or "").strip()
-    if not query:
-        raise ValueError("q is required")
-    if len(query) > 500:
-        raise ValueError("q must be 500 characters or fewer")
+    query = _clean_memory_query(query)
     limit = max(1, min(int(limit), 10))
     from jarvis_mem0 import search_memories
     text = search_memories(query, limit=limit) or ""
@@ -412,46 +751,20 @@ def _find_spend_replay(identity, key):
     return None
 
 
-def default_spend_actor(presented_token, legacy_token):
-    """Actor used when POST /spend omits one.
-
-    The configured JARVIS_API_TOKEN is the legacy owner credential, so a
-    request that presents it is audited as 'owner'. Any other token stays
-    'unknown'. Replace this function when per-bot tokens should name the
-    actor; an explicit body actor still wins in spend_actor.
-    """
-    presented = (presented_token or "").strip()
-    legacy = (legacy_token or "").strip()
-    if not presented or not legacy:
-        return "unknown"
-    same = hmac.compare_digest(
-        hashlib.sha256(presented.encode("utf-8")).digest(),
-        hashlib.sha256(legacy.encode("utf-8")).digest(),
-    )
-    return "owner" if same else "unknown"
-
-
-def spend_actor(body, presented_token=None, legacy_token=None):
-    """Audit name for a spend. A non-blank body actor wins over the default."""
-    raw = body.get("actor") if isinstance(body, dict) else None
-    if isinstance(raw, str) and raw.strip():
-        return _parse_actor(raw)
-    return default_spend_actor(presented_token, legacy_token)
-
-
-def apply_spend(body, idempotency_key=None, presented_token=None, legacy_token=None):
+def apply_spend(body, idempotency_key=None):
     """Log one spend, audit who logged it, and collapse retries.
 
-    `actor` is optional. When it is omitted, spend_actor records 'owner'
-    for the legacy API token and 'unknown' otherwise. Optional `reason`
-    is audit-only. Idempotency-Key, when present, replays the original
+    The audit actor is the bearer token: owner for JARVIS_API_TOKEN, or the
+    bot name. A body actor is accepted and ignored, even when it is blank or
+    malformed, so existing callers are not rejected. Optional reason is
+    audit-only. Idempotency-Key, when present, replays the original
     response. Without it, an identical amount, category, and note inside
     60 seconds is not written a second time.
     """
     _json_object(body)
     _reject_unknown_fields(body, _SPEND_BODY_KEYS)
     _reject_nulls(body)
-    actor = spend_actor(body, presented_token, legacy_token)
+    actor = _request_actor()
     reason = _reason(body)
     key = _clean_idempotency_key(idempotency_key)
     from live_spend import normalise_spend
@@ -494,23 +807,6 @@ def _reject_unknown_fields(body, allowed):
     extra = sorted(set(body) - set(allowed))
     if extra:
         raise ValueError(f"unknown field(s): {', '.join(extra)}")
-
-
-def _parse_actor(raw):
-    """Validate an actor name. Blank input is rejected; callers default first."""
-    if not isinstance(raw, str) or not raw.strip():
-        raise ValueError("actor is required")
-    actor = raw.strip()
-    if not _ACTOR_RE.fullmatch(actor):
-        raise ValueError("actor must be 1-40 characters (letters, digits, '.', '_', '-')")
-    return actor
-
-
-def _actor(body):
-    """Return the external agent name recorded in the audit log."""
-    if not isinstance(body, dict) or "actor" not in body or body["actor"] is None:
-        raise ValueError("actor is required")
-    return _parse_actor(body["actor"])
 
 
 def _reason(body):
@@ -596,7 +892,7 @@ def apply_mentor_write(body):
     _json_object(body)
     _reject_unknown_fields(body, _MENTOR_BODY_KEYS)
     _reject_nulls(body)
-    actor = _actor(body)
+    actor = _request_actor()
     reason = _reason(body)
     updates = {key: body[key] for key in term_context.MENTOR_WRITABLE_FIELDS if key in body}
 
@@ -626,7 +922,7 @@ def apply_internship_write(body):
     _json_object(body)
     _reject_unknown_fields(body, _INTERNSHIP_PATCH_KEYS)
     _reject_nulls(body)
-    actor = _actor(body)
+    actor = _request_actor()
     reason = _reason(body)
     if "company" not in body:
         raise ValueError("company is required")
@@ -664,7 +960,7 @@ def apply_internship_add(body):
     _json_object(body)
     _reject_unknown_fields(body, _INTERNSHIP_ADD_KEYS)
     _reject_nulls(body)
-    actor = _actor(body)
+    actor = _request_actor()
     reason = _reason(body)
     for key in ("company", "role", "status"):
         if key not in body:
@@ -1071,30 +1367,71 @@ def _bounded_int(raw, default, lo, hi, name):
     return value
 
 
-def create_app(token=None):
+def create_app(token=None, bot_tokens=None):
     """
-    Build the Flask app. Every route requires the bearer token.
+    Build the Flask app. Every route requires a bearer token.
 
-    token: override for tests. None reads JARVIS_API_TOKEN. Refuses to build
-    the app when the token is empty so a misconfigured service cannot start open.
+    token: legacy owner token. None, together with bot_tokens None, reads
+    JARVIS_API_TOKEN and JARVIS_API_TOKENS and enforces the 32-character
+    minimum. Passing token (the test override) skips that length check.
+    bot_tokens: optional {actor: token} map. Ignored env when token is passed
+    unless this argument is set. Refuses to build the app with no principals.
     """
     from flask import Flask, jsonify, request
 
-    expected = api_token() if token is None else token
-    if not expected:
-        raise RuntimeError("JARVIS_API_TOKEN is not set")
+    if token is None and bot_tokens is None:
+        principals = load_principals_from_env()
+    else:
+        principals = []
+        if token is not None:
+            if not str(token).strip():
+                raise RuntimeError("JARVIS_API_TOKEN is not set")
+            principals.append(Principal(OWNER_ACTOR, str(token).strip(), full_access=True))
+        for actor, value in (bot_tokens or {}).items():
+            secret = str(value or "").strip()
+            if not secret:
+                raise RuntimeError(f"bot token for {actor} is empty")
+            principals.append(Principal(actor, secret, full_access=False))
+        if not principals:
+            raise RuntimeError("JARVIS_API_TOKEN is not set")
 
     app = Flask(__name__)
+    app.config["MAX_CONTENT_LENGTH"] = MAX_BODY_BYTES
+    throttle = AuthThrottle()
 
     @app.before_request
     def _require_bearer():
-        if not bearer_matches(request.headers.get("Authorization", ""), expected):
+        ip = client_ip_from_headers(
+            request.remote_addr,
+            request.headers.get("X-Forwarded-For", ""),
+        )
+        if throttle.too_many(ip):
+            return jsonify({"error": "too many attempts"}), 429
+        principal = match_principal(request.headers.get("Authorization", ""), principals)
+        if principal is None:
+            throttle.record_failure(ip)
+            _actor_var.set(None)
             return jsonify({"error": "unauthorized"}), 401
+        _actor_var.set(principal.actor)
+        # Unknown paths stay 404. A known path with the wrong method is 405
+        # when this principal may call it, and 403 when they may not.
+        exc = request.routing_exception
+        if exc is not None and getattr(exc, "code", None) != 405:
+            return None
+        if not principal.allows(request.path):
+            return jsonify({"error": "forbidden"}), 403
+        if exc is not None:
+            return None
 
     @app.after_request
     def _no_store(response):
         response.headers["Cache-Control"] = "no-store"
         return response
+
+    @app.errorhandler(413)
+    def _too_large(_err):
+        """Body larger than MAX_BODY_BYTES."""
+        return jsonify({"error": "request body too large"}), 413
 
     @app.get("/health")
     def health():
@@ -1107,7 +1444,13 @@ def create_app(token=None):
         body = request.get_json(silent=True)
         try:
             _json_object(body)
-            answer = answer_question(body.get("question", ""))
+            question = _clean_question(body.get("question", ""))
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        if not consume_daily_quota("ask"):
+            return jsonify({"error": "daily limit reached"}), 429
+        try:
+            answer = answer_question(question)
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
         except Exception as e:
@@ -1140,8 +1483,14 @@ def create_app(token=None):
     def memory_search():
         """Semantic memory search. ?q=...&limit=1..10."""
         try:
+            query = _clean_memory_query(request.args.get("q", ""))
             limit = _bounded_int(request.args.get("limit"), 5, 1, 10, "limit")
-            return jsonify(search_memory_payload(request.args.get("q", ""), limit=limit))
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        if not consume_daily_quota("memory_search"):
+            return jsonify({"error": "daily limit reached"}), 429
+        try:
+            return jsonify(search_memory_payload(query, limit=limit))
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
         except Exception as e:
@@ -1164,8 +1513,6 @@ def create_app(token=None):
             return jsonify(apply_spend(
                 body,
                 request.headers.get("Idempotency-Key"),
-                presented_token=_presented_bearer(request.headers.get("Authorization", "")),
-                legacy_token=expected,
             ))
         except SpendConflict as e:
             return jsonify({"error": str(e)}), 409
@@ -1281,7 +1628,6 @@ if __name__ == "__main__":
 
     if args.serve:
         port = int(os.environ.get("JARVIS_API_PORT", DEFAULT_PORT))
-        print(f"\n🤖  Jarvis agent API on http://127.0.0.1:{port}\n")
-        create_app().run(host="127.0.0.1", port=port)
+        serve_app(create_app(), "127.0.0.1", port)
     else:
         parser.print_help()
