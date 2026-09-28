@@ -1118,3 +1118,13 @@ def test_spend_records_actor_audits_and_dedupes(tmp_path, monkeypatch):
     assert keyed.status_code == 200
     assert keyed.get_json() == first.get_json()
     assert len((tmp_path / "live_spend.jsonl").read_text().splitlines()) == 4
+
+
+def test_daily_caps_can_be_overridden_from_the_environment(monkeypatch):
+    monkeypatch.delenv("JARVIS_API_ASK_DAILY", raising=False)
+    assert agent_api._cap_from_env("JARVIS_API_ASK_DAILY", 30) == 30
+    monkeypatch.setenv("JARVIS_API_ASK_DAILY", "7")
+    assert agent_api._cap_from_env("JARVIS_API_ASK_DAILY", 30) == 7
+    for bad in ("0", "-3", "many", ""):
+        monkeypatch.setenv("JARVIS_API_ASK_DAILY", bad)
+        assert agent_api._cap_from_env("JARVIS_API_ASK_DAILY", 30) == 30
