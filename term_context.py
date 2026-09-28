@@ -188,6 +188,10 @@ DEFAULT_OWN_ACCOUNT_RULES = {
     "card_rails": ["visa purchase", "eftpos", "top-up", "topup"],
 }
 
+# How long after a purchase a matching credit can still offset it.
+# Override with spending.refund_window_days in term_context.json (1–60).
+DEFAULT_REFUND_WINDOW_DAYS = 14
+
 
 def _normalise_deadline(raw) -> str:
     """Parses an ISO date or a human 'January 2027'-style string into an ISO date string."""
@@ -250,6 +254,26 @@ def get_own_account_rules() -> dict:
         return cleaned or list(DEFAULT_OWN_ACCOUNT_RULES[key])
 
     return {key: _strings(key) for key in DEFAULT_OWN_ACCOUNT_RULES}
+
+
+def get_refund_window_days() -> int:
+    """
+    Days after a debit that a matching credit can still count as its refund.
+
+    Reads spending.refund_window_days from term_context.json. Missing or
+    out-of-range values fall back to DEFAULT_REFUND_WINDOW_DAYS (14).
+    """
+    raw = load_context().get("spending") or {}
+    if not isinstance(raw, dict):
+        return DEFAULT_REFUND_WINDOW_DAYS
+    value = raw.get("refund_window_days", DEFAULT_REFUND_WINDOW_DAYS)
+    try:
+        days = int(value)
+    except (TypeError, ValueError):
+        return DEFAULT_REFUND_WINDOW_DAYS
+    if days < 1 or days > 60:
+        return DEFAULT_REFUND_WINDOW_DAYS
+    return days
 
 
 def update_finance_goals(goals: dict):

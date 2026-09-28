@@ -287,6 +287,151 @@ def test_morning_brief_week_lists_genuine_categories_only(tmp_path, monkeypatch)
     assert "Knockout" in text
 
 
+def _refund_week_rows():
+    """22–28 Sep 2026, with the first Knockout ticket refunded the next morning."""
+    rows = []
+    for date, description, debit, credit in _week_rows():
+        if description == "Osko Withdrawal 22Sep Knockout R Jaiswal":
+            rows.append((
+                "22/09/2026",
+                "Osko Withdrawal 22Sep18:35 Knockout R Jaiswal",
+                "120.00",
+                "",
+            ))
+            rows.append((
+                "23/09/2026",
+                "Sct Deposit 23Sep09:11 Rishi Jaiswal",
+                "",
+                "120.00",
+            ))
+        elif description == "Osko Withdrawal 23Sep Knockout R Jaiswal":
+            rows.append((
+                "23/09/2026",
+                "Osko Withdrawal 23Sep10:30 Knockout R Jaiswal",
+                "120.00",
+                "",
+            ))
+        else:
+            rows.append((date, description, debit, credit))
+    rows.extend([
+        ("24/09/2026", "Osko Deposit 24Sep Pokemon Gemma Johnston", "", "390.00"),
+        ("24/09/2026", "Osko Deposit 24Sep Bank Carlos Santos", "", "135.00"),
+        ("25/09/2026", "Osko Deposit 25Sep Bank Carlos Santos", "", "54.00"),
+        ("26/09/2026", "Sct Deposit 26Sep Advance", "", "500.00"),
+        ("27/09/2026", "Osko Deposit 27Sep Nilesh Banga", "", "17000.00"),
+        ("24/09/2026", "Sct Deposit 24Sep Sent From Revolut Manav Jain Extra", "", "120.00"),
+    ])
+    return rows
+
+
+def test_refunded_knockout_brings_the_week_to_185(tmp_path, monkeypatch):
+    path = tmp_path / "everyday.csv"
+    _write_stgeorge(path, _refund_week_rows())
+    txns = finance_tracker.parse_stgeorge_csv(path)
+    summary = finance_tracker.summarise_spending(txns, WEEK_START, WEEK_END, 75)
+
+    assert summary["total_spend"] == 185.25
+    assert summary["by_category"]["Entertainment"] == 134.95
+    assert summary["by_category"]["Transport"] == 11.70
+    assert summary["by_category"]["Other"] == 38.60
+    assert [row["amount"] for row in summary["flagged"]] == [120.0]
+    assert "jaiswal" in summary["flagged"][0]["description"].lower()
+    assert summary["transaction_count"] == 7
+
+    class FrozenDateTime(datetime.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            naive = datetime.datetime(2026, 9, 28, 8, 0, 0)
+            if tz is None:
+                return naive
+            return tz.localize(naive)
+
+    monkeypatch.setattr(finance_tracker.datetime, "datetime", FrozenDateTime)
+    spending = finance_tracker.analyse_spending(txns, days=7)
+    assert round(spending["total_spend"], 2) == 185.25
+    assert round(spending["category_totals"]["Entertainment"], 2) == 134.95
+    assert [t["debit"] for t in spending["big_transactions"]] == [120.0]
+    knockouts = [
+        t for t in spending["transactions"]
+        if "knockout" in t["description"].lower()
+    ]
+    assert len(knockouts) == 1
+    assert "10:30" in knockouts[0]["description"]
+
+
+def _txn(day, description, debit=0, credit=0):
+    return {
+        "date": day,
+        "description": description,
+        "debit": float(debit or 0),
+        "credit": float(credit or 0),
+        "balance": 0.0,
+        "category": finance_tracker.categorise(description),
+    }
+
+
+def test_refund_matching_is_conservative():
+    """Same amount is not enough. Income, friends, and a different Jaiswal stay."""
+    day = datetime.date(2026, 9, 22)
+    later = datetime.date(2026, 9, 23)
+    txns = [
+        _txn(day, "Visa Purchase 22Sep Woolworths Sydney", debit=390),
+        _txn(later, "Osko Deposit 23Sep Pokemon Gemma Johnston", credit=390),
+        _txn(day, "Visa Purchase 22Sep Coles Sydney", debit=135),
+        _txn(later, "Osko Deposit 23Sep Bank Carlos Santos", credit=135),
+        _txn(day, "Osko Withdrawal 22Sep18:35 Knockout R Jaiswal", debit=54),
+        _txn(later, "Osko Deposit 23Sep09:11 Bank Carlos Santos", credit=54),
+        _txn(day, "Visa Purchase 22Sep Kmart Broadway", debit=80),
+        _txn(later, "Sct Deposit 23Sep Advance", credit=80),
+        _txn(day, "Osko Withdrawal 22Sep Nilesh Banga", debit=100),
+        _txn(later, "Osko Deposit 23Sep Nilesh Banga", credit=100),
+        _txn(day, "Osko Withdrawal 22Sep18:35 Knockout R Jaiswal", debit=120),
+        _txn(later, "Sct Deposit 23Sep09:11 Priya Jaiswal", credit=120),
+        _txn(day, "Visa Purchase 22Sep Woolworths Sydney", debit=40),
+        _txn(later, "Visa Refund 23Sep Woolworths Sydney", credit=15),
+    ]
+    summary = finance_tracker.summarise_spending(
+        txns, day, datetime.date(2026, 9, 28), 75,
+    )
+    # The $15 Visa refund reduces a Woolworths debit. The other credits do not.
+    assert summary["total_spend"] == 904.0
+    assert summary["by_category"]["Food & dining"] == 550.0  # 390 + 135 + 40 - 15
+    assert summary["by_category"]["Entertainment"] == 174.0  # 54 + 120, Priya is not a refund
+    assert summary["by_category"]["Shopping"] == 80.0
+
+
+def test_one_debit_takes_one_refund_only():
+    day = datetime.date(2026, 9, 22)
+    txns = [
+        _txn(day, "Osko Withdrawal 22Sep18:35 Knockout R Jaiswal", debit=120),
+        _txn(datetime.date(2026, 9, 23), "Sct Deposit 23Sep09:11 Rishi Jaiswal", credit=120),
+        _txn(datetime.date(2026, 9, 24), "Sct Deposit 24Sep10:00 Rishi Jaiswal", credit=120),
+        _txn(datetime.date(2026, 9, 22), "Visa Purchase 22Sep Woolworths Sydney", debit=120),
+    ]
+    summary = finance_tracker.summarise_spending(
+        txns, day, datetime.date(2026, 9, 28), 75,
+    )
+    assert summary["total_spend"] == 120.0
+    assert summary["by_category"] == {"Food & dining": 120.0}
+    assert summary["flagged"][0]["category"] == "Food & dining"
+
+
+def test_refund_window_is_configurable(tmp_path):
+    day = datetime.date(2026, 9, 1)
+    txns = [
+        _txn(day, "Osko Withdrawal 01Sep18:35 Knockout R Jaiswal", debit=120),
+        _txn(datetime.date(2026, 9, 10), "Sct Deposit 10Sep09:11 Rishi Jaiswal", credit=120),
+    ]
+    inside = finance_tracker.summarise_spending(txns, day, datetime.date(2026, 9, 20), 75)
+    assert inside["total_spend"] == 0.0
+
+    (tmp_path / "term_context.json").write_text(json.dumps({
+        "spending": {"refund_window_days": 1},
+    }))
+    outside = finance_tracker.summarise_spending(txns, day, datetime.date(2026, 9, 20), 75)
+    assert outside["total_spend"] == 120.0
+
+
 def test_savings_balance_is_unchanged_by_the_spend_filter(tmp_path, monkeypatch):
     savings = tmp_path / "savings1.csv"
     monkeypatch.setattr(finance_tracker, "SAVINGS1_CSV", savings)

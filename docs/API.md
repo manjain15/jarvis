@@ -182,7 +182,12 @@ curl -sS -H "Authorization: Bearer $JARVIS_API_TOKEN" \
 as well: internet withdrawals, transfers, Osko/Sct withdrawals whose payee is
 an owner name, and card top-ups of an own account (Revolut**5228). Names and
 card patterns default to Manav Jain / Revolut and can be overridden under
-`own_accounts` in `term_context.json`. `weekly_budget`
+`own_accounts` in `term_context.json`. A later credit reduces a debit when it
+is the same amount or smaller, the payee matches (surname plus a given name
+or initial, or a merchant card refund of the same shop), and it lands within
+`spending.refund_window_days` (default 14). Each debit is offset once.
+Salary, reselling payouts, friend deposits, and transfers from his own
+accounts are not refunds. `weekly_budget`
 is the `exchange_target` weekly budget ($75 unless `term_context.json` says
 otherwise). `budget_for_range` prorates that budget by `days / 7`.
 `weekly_equivalent` is spend scaled to a 7-day week. `over_budget` compares
