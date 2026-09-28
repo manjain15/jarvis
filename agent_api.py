@@ -44,6 +44,9 @@ import hmac
 import json
 import os
 import re
+import threading
+import time
+from collections import defaultdict, deque
 from pathlib import Path
 
 import pytz
@@ -56,6 +59,30 @@ SCRIPT_DIR = Path(__file__).parent
 DATA_DIR   = SCRIPT_DIR / "data"
 BRIEF_FILE = DATA_DIR / "latest_brief.json"
 AUDIT_FILE = DATA_DIR / "agent_api_audit.jsonl"
+USAGE_FILE = DATA_DIR / "agent_api_usage.json"
+
+MIN_TOKEN_LEN = 32
+MAX_BODY_BYTES = 16 * 1024
+AUTH_FAIL_LIMIT = 10        # failed logins per client before it is blocked
+AUTH_FAIL_WINDOW = 300      # seconds
+SPEND_DEDUPE_SECONDS = 60
+
+# Per-bot tokens: JARVIS_API_TOKENS="career:<token>,study:<token>,money:<token>".
+# The name becomes the audit actor and limits which routes the token can call.
+# "admin" (and the legacy single JARVIS_API_TOKEN) may call every route.
+_FINANCE_ROUTES = {
+    "finance", "finance_spending", "finance_savings",
+    "finance_subscriptions", "finance_reselling",
+}
+BOT_SCOPES = {
+    "career": {"health", "flags", "context", "patch_mentor", "patch_internship", "add_internship"},
+    "study": {"health", "flags", "context"},
+    "money": {"health", "spend"} | _FINANCE_ROUTES,
+    "admin": None,
+}
+
+# Daily call caps for the routes that cost money. Env override, 0 disables.
+_DAILY_CAP_ENV = {"ask": ("JARVIS_API_ASK_DAILY", 30), "memory_search": ("JARVIS_API_MEMORY_DAILY", 100)}
 
 _ACTOR_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$")
 _MENTOR_BODY_KEYS = {"actor", "reason", *term_context.MENTOR_WRITABLE_FIELDS}
@@ -67,15 +94,125 @@ DEFAULT_PORT = 5557
 
 _TAG_RE = re.compile(r"<[^>]+>")
 _BREAK_RE = re.compile(r"<br\s*/?>|</p>|</h[1-6]>|</li>|</div>|</tr>", re.I)
-# St. George descriptions embed the owner's own account numbers as long digit
-# runs. 8+ digits also covers card PANs. Dates and dollar amounts are shorter
-# or contain separators, so they are left alone.
-_ACCOUNT_DIGITS = re.compile(r"\d{8,}")
+# St. George descriptions embed the owner's own account numbers, card numbers
+# and PayID details. Digit runs of 8+ digits are redacted even when broken up by
+# single spaces or dashes ("4111 1111 1111 1111"), as are masked card tails
+# ("xx1234") and email addresses. ISO dates are left alone, as are dollar amounts
+# (they carry commas or a decimal point).
+_ACCOUNT_DIGITS = re.compile(
+    r"(?<![\d.,])(?:(?P<date>\d{4}-\d{2}-\d{2})(?!\d)|\d(?:[ -]?\d){7,}(?![\d]|[.,]\d))"
+)
+_MASKED_TAIL = re.compile(r"\b[xX*]{2,}[ -]?\d{2,4}\b")
+_EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 
 
 def api_token():
-    """Return the configured bearer token, or '' if it is unset."""
+    """Return the legacy single bearer token, or '' if it is unset."""
     return os.environ.get("JARVIS_API_TOKEN", "").strip()
+
+
+def load_tokens():
+    """
+    Return [(token, actor_or_None)] from the environment.
+
+    JARVIS_API_TOKENS holds "name:token" pairs for per-bot tokens; names must be
+    keys of BOT_SCOPES and tokens at least MIN_TOKEN_LEN characters. The legacy
+    JARVIS_API_TOKEN maps to actor None (full access, actor taken from the
+    request body). Raises RuntimeError on a malformed pair.
+    """
+    tokens = []
+    for pair in os.environ.get("JARVIS_API_TOKENS", "").split(","):
+        pair = pair.strip()
+        if not pair:
+            continue
+        name, sep, token = pair.partition(":")
+        name, token = name.strip().lower(), token.strip()
+        if not sep or name not in BOT_SCOPES:
+            raise RuntimeError(f"JARVIS_API_TOKENS entry must be name:token with name in {sorted(BOT_SCOPES)}")
+        if len(token) < MIN_TOKEN_LEN:
+            raise RuntimeError(f"token for '{name}' must be at least {MIN_TOKEN_LEN} characters")
+        tokens.append((token, name))
+    legacy = api_token()
+    if legacy:
+        if len(legacy) < MIN_TOKEN_LEN:
+            print(f"⚠️  JARVIS_API_TOKEN is shorter than {MIN_TOKEN_LEN} characters; rotate it")
+        tokens.append((legacy, None))
+    return tokens
+
+
+def match_bearer(authorization_header, tokens):
+    """
+    Return (True, actor) when the header matches any token, else (False, None).
+
+    Every token is compared, with no early exit, so timing does not reveal
+    which entry matched.
+    """
+    hit = (False, None)
+    for token, actor in tokens:
+        if bearer_matches(authorization_header, token) and not hit[0]:
+            hit = (True, actor)
+    return hit
+
+
+class FailureLimiter:
+    """Blocks a client after too many failed logins inside a sliding window."""
+
+    def __init__(self, limit=AUTH_FAIL_LIMIT, window=AUTH_FAIL_WINDOW):
+        self.limit, self.window = limit, window
+        self._hits = defaultdict(deque)
+        self._lock = threading.Lock()
+
+    def _prune(self, key, now):
+        hits = self._hits[key]
+        while hits and now - hits[0] > self.window:
+            hits.popleft()
+        return hits
+
+    def blocked(self, key, now=None):
+        """True when key has used up its failed-login allowance."""
+        now = time.monotonic() if now is None else now
+        with self._lock:
+            return len(self._prune(key, now)) >= self.limit
+
+    def record(self, key, now=None):
+        """Note one failed login for key."""
+        now = time.monotonic() if now is None else now
+        with self._lock:
+            self._prune(key, now).append(now)
+
+
+def daily_cap(name):
+    """Configured daily call cap for a costly route (0 = unlimited)."""
+    env, default = _DAILY_CAP_ENV[name]
+    try:
+        return max(0, int(os.environ.get(env, default)))
+    except ValueError:
+        return default
+
+
+def consume_daily(name):
+    """
+    Count one call against today's cap for `name`. Returns False when the cap
+    is used up. State lives in data/agent_api_usage.json under a lock.
+    """
+    cap = daily_cap(name)
+    if cap == 0:
+        return True
+    today = datetime.datetime.now(TIMEZONE).date().isoformat()
+    with file_lock(USAGE_FILE):
+        try:
+            data = json.loads(USAGE_FILE.read_text())
+        except (OSError, json.JSONDecodeError):
+            data = {}
+        if not isinstance(data, dict) or data.get("date") != today:
+            data = {"date": today}
+        used = int(data.get(name, 0))
+        if used >= cap:
+            return False
+        data[name] = used + 1
+        USAGE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(USAGE_FILE, data)
+    return True
 
 
 def bearer_matches(authorization_header, expected):
@@ -280,18 +417,45 @@ def search_memory_payload(query, limit=5):
     return {"query": query, "limit": limit, "text": text}
 
 
+def _recent_duplicate(amount, category, note):
+    """
+    Return a live-spend entry identical to this one and logged within
+    SPEND_DEDUPE_SECONDS, or None. A bot retrying a timed-out POST must not
+    double-count against the weekly budget. Any read problem means no duplicate.
+    """
+    try:
+        from live_spend import load_entries
+        amt = round(float(amount), 2)
+        cat = str(category or "").strip().lower()
+        text = str(note or "").strip()[:200]
+        now = datetime.datetime.now(TIMEZONE)
+        for entry in load_entries(days=1):
+            if (entry["amount"] == amt and entry["category"].lower() == cat
+                    and entry.get("note", "") == text):
+                age = (now - datetime.datetime.fromisoformat(entry["ts"])).total_seconds()
+                if age <= SPEND_DEDUPE_SECONDS:
+                    return entry
+    except Exception:
+        return None
+    return None
+
+
 def log_spend_entry(amount, category, note=""):
     """
     Validate and append one live-spend entry via live_spend.log_spend.
 
     Raises ValueError on bad input. Returns the same confirmation shape the
-    Back Tap endpoint uses, plus the stored entry.
+    Back Tap endpoint uses, plus the stored entry. An identical entry logged in
+    the last SPEND_DEDUPE_SECONDS is returned again with duplicate=True instead
+    of being appended twice.
     """
     from live_spend import get_live_summary, log_spend
-    entry = log_spend(amount, category, note)
+    duplicate = _recent_duplicate(amount, category, note)
+    entry = duplicate or log_spend(amount, category, note)
     week_total = get_live_summary(days=7).get("total", entry["amount"])
     return {
         "ok": True,
+        "duplicate": duplicate is not None,
         "logged": f"${entry['amount']:.2f} {entry['category']}",
         "week_total": f"${week_total:.2f}",
         "entry": {
@@ -324,7 +488,7 @@ def _reject_unknown_fields(body, allowed):
 
 
 def _actor(body):
-    """Return the external agent name recorded in the audit log."""
+    """Return the external agent name from the body (legacy single-token clients only)."""
     if "actor" not in body or body["actor"] is None:
         raise ValueError("actor is required")
     raw = body["actor"]
@@ -383,7 +547,7 @@ def _audit_entry(actor, action, target, reason, old, new):
     }
 
 
-def apply_mentor_write(body):
+def apply_mentor_write(body, actor=None):
     """
     Patch the mentor record and audit the diff.
 
@@ -397,7 +561,7 @@ def apply_mentor_write(body):
     _json_object(body)
     _reject_unknown_fields(body, _MENTOR_BODY_KEYS)
     _reject_nulls(body)
-    actor = _actor(body)
+    actor = actor or _actor(body)
     reason = _reason(body)
     updates = {key: body[key] for key in term_context.MENTOR_WRITABLE_FIELDS if key in body}
 
@@ -416,7 +580,7 @@ def apply_mentor_write(body):
     }
 
 
-def apply_internship_write(body):
+def apply_internship_write(body, actor=None):
     """
     Patch one internship row and audit the diff.
 
@@ -427,7 +591,7 @@ def apply_internship_write(body):
     _json_object(body)
     _reject_unknown_fields(body, _INTERNSHIP_PATCH_KEYS)
     _reject_nulls(body)
-    actor = _actor(body)
+    actor = actor or _actor(body)
     reason = _reason(body)
     if "company" not in body:
         raise ValueError("company is required")
@@ -455,7 +619,7 @@ def apply_internship_write(body):
     }
 
 
-def apply_internship_add(body):
+def apply_internship_add(body, actor=None):
     """
     Append one internship application and audit the new row.
 
@@ -465,7 +629,7 @@ def apply_internship_add(body):
     _json_object(body)
     _reject_unknown_fields(body, _INTERNSHIP_ADD_KEYS)
     _reject_nulls(body)
-    actor = _actor(body)
+    actor = actor or _actor(body)
     reason = _reason(body)
     for key in ("company", "role", "status"):
         if key not in body:
@@ -500,13 +664,17 @@ def apply_internship_add(body):
 
 def redact_account_numbers(value):
     """
-    Replace 8+ digit runs anywhere in a JSON-like structure.
+    Redact account/card numbers, masked tails and emails in a JSON-like structure.
 
     Finance descriptions quote internal transfer account numbers. Totals,
     dates, and category names do not contain a run that long.
     """
     if isinstance(value, str):
-        return _ACCOUNT_DIGITS.sub("[redacted]", value)
+        def _digits(match):
+            return match.group(0) if match.group("date") else "[redacted]"
+        value = _ACCOUNT_DIGITS.sub(_digits, value)
+        value = _MASKED_TAIL.sub("[redacted]", value)
+        return _EMAIL.sub("[redacted]", value)
     if isinstance(value, list):
         return [redact_account_numbers(item) for item in value]
     if isinstance(value, dict):
@@ -572,7 +740,9 @@ def get_spending_payload(start, end):
         }
 
     transactions = finance_tracker.parse_stgeorge_csv(finance_tracker.EVERYDAY_CSV)
-    summary = finance_tracker.summarise_spending(transactions, start, end, weekly_budget)
+    summary = finance_tracker.summarise_spending(
+        transactions, start, end, weekly_budget, redact=redact_account_numbers,
+    )
     summary["available"] = True
 
     today = datetime.datetime.now(TIMEZONE).date()
@@ -784,30 +954,82 @@ def _bounded_int(raw, default, lo, hi, name):
     return value
 
 
+def _body_object(body):
+    """Return the parsed JSON body, or raise ValueError when it is not an object."""
+    if not isinstance(body, dict):
+        raise ValueError("JSON object required")
+    return body
+
+
+def _client_key(request):
+    """
+    Identify the caller for failed-login throttling.
+
+    Behind Tailscale Funnel the socket peer is always the local proxy, so use
+    the last X-Forwarded-For hop (the one the proxy appended, which a client
+    cannot forge). Falls back to the socket address.
+    """
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    hops = [hop.strip() for hop in forwarded.split(",") if hop.strip()]
+    return hops[-1] if hops else (request.remote_addr or "unknown")
+
+
 def create_app(token=None):
     """
-    Build the Flask app. Every route requires the bearer token.
+    Build the Flask app. Every route requires a bearer token.
 
-    token: override for tests. None reads JARVIS_API_TOKEN. Refuses to build
-    the app when the token is empty so a misconfigured service cannot start open.
+    token: single-token override for tests (full access). None reads
+    JARVIS_API_TOKENS and JARVIS_API_TOKEN. Refuses to build the app when no
+    token is configured so a misconfigured service cannot start open.
     """
-    from flask import Flask, jsonify, request
+    from flask import Flask, g, jsonify, request
+    from werkzeug.exceptions import HTTPException
 
-    expected = api_token() if token is None else token
-    if not expected:
-        raise RuntimeError("JARVIS_API_TOKEN is not set")
+    tokens = load_tokens() if token is None else ([(token, None)] if token else [])
+    if not tokens:
+        raise RuntimeError("JARVIS_API_TOKEN (or JARVIS_API_TOKENS) is not set")
 
     app = Flask(__name__)
+    app.config["MAX_CONTENT_LENGTH"] = MAX_BODY_BYTES
+    limiter = FailureLimiter()
 
     @app.before_request
     def _require_bearer():
-        if not bearer_matches(request.headers.get("Authorization", ""), expected):
+        client = _client_key(request)
+        if limiter.blocked(client):
+            return jsonify({"error": "too many failed attempts"}), 429
+        ok, actor = match_bearer(request.headers.get("Authorization", ""), tokens)
+        if not ok:
+            limiter.record(client)
             return jsonify({"error": "unauthorized"}), 401
+        g.actor = actor
+        allowed = BOT_SCOPES.get(actor)
+        if actor is not None and allowed is not None and request.endpoint not in allowed \
+                and request.endpoint is not None:
+            return jsonify({"error": "forbidden for this token"}), 403
 
     @app.after_request
     def _no_store(response):
         response.headers["Cache-Control"] = "no-store"
         return response
+
+    @app.errorhandler(413)
+    def _too_large(_e):
+        return jsonify({"error": f"body must be {MAX_BODY_BYTES} bytes or fewer"}), 413
+
+    @app.errorhandler(500)
+    def _server_error(_e):
+        return jsonify({"error": "internal error"}), 500
+
+    def _limited(name):
+        """Return a 429 response when today's cap for `name` is used up, else None."""
+        try:
+            if consume_daily(name):
+                return None
+        except Exception as e:
+            print(f"⚠️  daily cap check failed: {e}")
+            return None
+        return jsonify({"error": f"daily limit reached for {name}"}), 429
 
     @app.get("/health")
     def health():
@@ -817,11 +1039,19 @@ def create_app(token=None):
     @app.post("/ask")
     def ask():
         """Free-text question. Same conversational brain as Telegram, read-only."""
-        body = request.get_json(silent=True) or {}
         try:
-            answer = answer_question(body.get("question", ""))
+            body = _body_object(request.get_json(silent=True))
+            question = body.get("question", "")
+            if not isinstance(question, str):
+                raise ValueError("question must be a string")
+            capped = _limited("ask") if question.strip() else None
+            if capped:
+                return capped
+            answer = answer_question(question)
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
+        except HTTPException:
+            raise
         except Exception as e:
             print(f"⚠️  /ask failed: {e}")
             return jsonify({"error": "ask failed"}), 500
@@ -853,7 +1083,11 @@ def create_app(token=None):
         """Semantic memory search. ?q=...&limit=1..10."""
         try:
             limit = _bounded_int(request.args.get("limit"), 5, 1, 10, "limit")
-            return jsonify(search_memory_payload(request.args.get("q", ""), limit=limit))
+            query = request.args.get("q", "")
+            capped = _limited("memory_search") if query.strip() else None
+            if capped:
+                return capped
+            return jsonify(search_memory_payload(query, limit=limit))
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
         except Exception as e:
@@ -870,31 +1104,44 @@ def create_app(token=None):
 
     @app.post("/spend")
     def spend():
-        """Log one spend entry. Same validation as the Back Tap endpoint."""
-        body = request.get_json(silent=True) or {}
+        """Log one spend entry. Same validation as the Back Tap endpoint. Audited."""
         try:
-            return jsonify(log_spend_entry(
+            body = _body_object(request.get_json(silent=True))
+            result = log_spend_entry(
                 body.get("amount"),
                 body.get("category"),
                 body.get("note", ""),
-            ))
+            )
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
+        except HTTPException:
+            raise
         except Exception as e:
             print(f"⚠️  /spend failed: {e}")
             return jsonify({"error": "spend failed"}), 500
+        if not result.get("duplicate"):
+            try:
+                append_external_audit(_audit_entry(
+                    g.get("actor") or "legacy", "spend", {"record": "live_spend"},
+                    "", None, result.get("entry"),
+                ))
+            except Exception as e:
+                print(f"⚠️  /spend audit failed: {e}")
+        return jsonify(result)
 
     def _commit(handler, label, success_status=200):
         """Run a term-context write and map record errors to HTTP status codes."""
         body = request.get_json(silent=True)
         try:
-            return jsonify(handler(body)), success_status
+            return jsonify(handler(body, actor=g.get("actor"))), success_status
         except term_context.TermRecordNotFound as e:
             return jsonify({"error": str(e)}), 404
         except term_context.TermRecordConflict as e:
             return jsonify({"error": str(e)}), 409
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
+        except HTTPException:
+            raise
         except Exception as e:
             print(f"⚠️  {label} failed: {e}")
             return jsonify({"error": f"{label} failed"}), 500
@@ -987,6 +1234,12 @@ if __name__ == "__main__":
     if args.serve:
         port = int(os.environ.get("JARVIS_API_PORT", DEFAULT_PORT))
         print(f"\n🤖  Jarvis agent API on http://127.0.0.1:{port}\n")
-        create_app().run(host="127.0.0.1", port=port)
+        app = create_app()
+        try:
+            from waitress import serve
+            serve(app, host="127.0.0.1", port=port, threads=4)
+        except ImportError:
+            # Werkzeug's dev server is the fallback until waitress is installed.
+            app.run(host="127.0.0.1", port=port)
     else:
         parser.print_help()

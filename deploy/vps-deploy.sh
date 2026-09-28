@@ -32,6 +32,12 @@ if ! git diff --quiet "$BEFORE" "$AFTER" -- requirements-vps.txt; then
     venv/bin/pip install -r requirements-vps.txt
 fi
 
+# Unit files are not installed by this script (no sudo cp rule). Say so when
+# they change, so a new timer or unit hardening is not silently ignored.
+if ! git diff --quiet "$BEFORE" "$AFTER" -- deploy/systemd; then
+    echo "⚠ deploy/systemd changed — install on the VPS: sudo cp deploy/systemd/* /etc/systemd/system/ && sudo systemctl daemon-reload"
+fi
+
 echo "→ Restarting jarvis-telegram.service"
 sudo systemctl restart jarvis-telegram.service
 
@@ -42,7 +48,9 @@ fi
 
 if systemctl is-enabled --quiet jarvis-agent-api.service 2>/dev/null; then
     echo "→ Restarting jarvis-agent-api.service"
-    sudo systemctl restart jarvis-agent-api.service
+    # A missing sudoers rule must not fail the whole deploy after the code is live.
+    sudo systemctl restart jarvis-agent-api.service \
+        || echo "⚠ could not restart jarvis-agent-api.service (check sudoers); restart it manually"
 fi
 
 echo "✓ Deploy complete"

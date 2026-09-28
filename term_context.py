@@ -33,6 +33,7 @@ external corrections hit the same locked, atomic file the flags read.
 import json
 import datetime
 import re
+import shutil
 from pathlib import Path
 
 import pytz
@@ -97,16 +98,39 @@ def load_context() -> dict:
         return {}
 
 
+def _load_for_write() -> dict:
+    """
+    Load term_context.json for a read-modify-write.
+
+    A missing file starts empty. A file that exists but cannot be parsed
+    raises instead of returning {}, so a torn copy or a typo can never be
+    overwritten with a near-empty document.
+    """
+    if not CONTEXT_FILE.exists():
+        return {}
+    try:
+        ctx = json.loads(CONTEXT_FILE.read_text())
+    except Exception as e:
+        raise RuntimeError(f"term_context.json is unreadable, refusing to overwrite it: {e}")
+    if not isinstance(ctx, dict):
+        raise RuntimeError("term_context.json is not a JSON object, refusing to overwrite it")
+    return ctx
+
+
 def mutate_context(mutate_fn):
     """
     Race-safe read-modify-write for term_context.json: holds a lock across
     the full load -> mutate -> save cycle so a concurrent cron job or
     Telegram command can't clobber this write. `mutate_fn(ctx)` mutates
-    the loaded dict in place.
+    the loaded dict in place. The previous file is kept as
+    term_context.json.bak before each write, and an unreadable file aborts
+    the write (see _load_for_write).
     """
     with file_lock(CONTEXT_FILE):
-        ctx = load_context()
+        ctx = _load_for_write()
         mutate_fn(ctx)
+        if CONTEXT_FILE.exists():
+            shutil.copy2(CONTEXT_FILE, CONTEXT_FILE.with_name(CONTEXT_FILE.name + ".bak"))
         atomic_write_json(CONTEXT_FILE, ctx)
         return ctx
 

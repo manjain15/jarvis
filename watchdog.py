@@ -28,7 +28,10 @@ jarvis-watchdog.service failed — visible via /status.
 
 import sys
 import shutil
+import os
 import subprocess
+import urllib.error
+import urllib.request
 
 # Units the watchdog checks. Keep in sync with deploy/systemd/.
 ALWAYS_ON     = ["jarvis-telegram", "jarvis-agent-api"]  # .service must be active
@@ -49,6 +52,22 @@ def _systemctl(*args):
         return ""
 
 
+def _agent_api_responds():
+    """
+    True when the agent API answers HTTP on localhost. Any status counts (the
+    API answers 401 without a token); only a refused connection or a timeout
+    means it is down. No token is needed, so none is stored here.
+    """
+    port = os.environ.get("JARVIS_API_PORT", "5557")
+    try:
+        urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=5)
+        return True
+    except urllib.error.HTTPError:
+        return True
+    except Exception:
+        return False
+
+
 def check_problems():
     """
     Return a list of human-readable problem strings. Empty list = all healthy.
@@ -60,6 +79,8 @@ def check_problems():
         state = _systemctl("is-active", f"{unit}.service")
         if state != "active":
             problems.append(f"❌ {unit} service is {state or 'unknown'} (should be active)")
+        elif unit == "jarvis-agent-api" and not _agent_api_responds():
+            problems.append("❌ jarvis-agent-api is active but not responding on localhost")
 
     # Timer-driven units: the timer must be active, and the last service run
     # must not have failed.

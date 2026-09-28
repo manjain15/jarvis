@@ -53,7 +53,6 @@ def test_refuses_to_start_without_token(monkeypatch):
 
 
 def test_every_route_requires_bearer():
-    client = _client()
     checks = [
         ("get", "/health", None),
         ("post", "/ask", {"question": "hi"}),
@@ -74,6 +73,7 @@ def test_every_route_requires_bearer():
         ("get", "/finance/reselling", None),
     ]
     for method, path, body in checks:
+        client = _client()  # fresh app: the failed-login limiter is per app
         kwargs = {}
         if body is not None:
             kwargs["json"] = body
@@ -129,7 +129,9 @@ def test_memory_route_rejects_blank_query():
     assert "q is required" in res.get_json()["error"]
 
 
-def test_flags_context_memory_spend_are_wired(monkeypatch):
+def test_flags_context_memory_spend_are_wired(monkeypatch, tmp_path):
+    monkeypatch.setattr(agent_api, "AUDIT_FILE", tmp_path / "audit.jsonl")
+    monkeypatch.setattr(agent_api, "USAGE_FILE", tmp_path / "usage.json")
     with pytest.raises(ValueError):
         agent_api.search_memory_payload("  ")
 

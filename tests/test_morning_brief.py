@@ -126,3 +126,12 @@ def test_salvage_drops_a_dangling_tag():
     body, note = html.split("<p><em>", 1)
     assert body == "<h2>Hello</h2>"
     assert note.startswith("Brief shortened to fit")
+
+
+def test_failed_retry_falls_back_to_the_closed_first_reply(monkeypatch):
+    scripted = _install(monkeypatch, [("<h2>Good morning.</h2><p>Cut off mid", "max_tokens")])
+    # Second call has no script entry, so the stand-in raises IndexError.
+    html = morning_brief.generate_brief("facts")
+    assert len(scripted.calls) == 2
+    assert "Brief shortened to fit" in html
+    assert html.count("<p>") == html.count("</p>")

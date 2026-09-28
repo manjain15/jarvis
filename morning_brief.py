@@ -798,6 +798,7 @@ def generate_brief(prompt):
     client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
     prompt_in_use = prompt
     retried_short = False
+    first_cutoff = None  # truncated first reply, kept in case the retry fails
 
     for attempt in range(5):
         try:
@@ -810,6 +811,7 @@ def generate_brief(prompt):
             if message.stop_reason == "max_tokens" and not retried_short and attempt < 4:
                 print("    ⚠️  Brief hit max_tokens — retrying once, shorter")
                 retried_short = True
+                first_cutoff = body
                 prompt_in_use = prompt + _SHORT_BRIEF_SUFFIX
                 continue
             if message.stop_reason == "max_tokens":
@@ -821,8 +823,18 @@ def generate_brief(prompt):
                 wait = 10 * (2 ** attempt)  # 10s, 20s, 40s, 80s
                 print(f"    ⚠️  Claude overloaded, retrying in {wait}s (attempt {attempt + 1}/5)...")
                 time.sleep(wait)
+            elif first_cutoff:
+                print(f"    ⚠️  Retry failed ({e}) — sending the closed first reply")
+                return salvage_truncated_html(first_cutoff)
             else:
                 raise
+        except Exception as e:
+            if not first_cutoff:
+                raise
+            print(f"    ⚠️  Retry failed ({e}) — sending the closed first reply")
+            return salvage_truncated_html(first_cutoff)
+    if first_cutoff:
+        return salvage_truncated_html(first_cutoff)
     raise RuntimeError("brief generation failed")
 
 

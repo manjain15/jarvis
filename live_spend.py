@@ -25,6 +25,7 @@ data sources aggregate cleanly.
 
 import argparse
 import datetime
+import hmac
 import json
 import secrets
 from pathlib import Path
@@ -198,7 +199,7 @@ def create_app():
     @app.post("/spend")
     def spend():
         """Auth-checked endpoint the iOS Shortcut POSTs entries to."""
-        if request.headers.get("X-Jarvis-Token", "") != token:
+        if not hmac.compare_digest(request.headers.get("X-Jarvis-Token", "").encode(), token.encode()):
             return jsonify({"error": "unauthorized"}), 401
         body = request.get_json(silent=True) or {}
         try:

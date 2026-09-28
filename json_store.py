@@ -18,6 +18,7 @@ USAGE:
 
 import fcntl
 import json
+import os
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -44,5 +45,8 @@ def atomic_write_json(path, data):
     """Writes JSON via temp-file + rename so readers never see a torn file."""
     path = Path(path)
     tmp = path.parent / (path.name + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2, default=str))
+    with open(tmp, "w") as f:
+        f.write(json.dumps(data, indent=2, default=str))
+        f.flush()
+        os.fsync(f.fileno())
     tmp.replace(path)

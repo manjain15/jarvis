@@ -626,14 +626,16 @@ def _is_internal_spend(description):
     return "internet withdrawal" in desc or "transfer" in desc
 
 
-def summarise_spending(transactions, start, end, weekly_budget):
+def summarise_spending(transactions, start, end, weekly_budget, redact=None):
     """
     Category totals and weekly-budget comparison for an inclusive date range.
 
     Drops the same internal transfers analyse_spending leaves out of total_spend
     (internet withdrawals and transfers) so the category totals add up to
     total_spend. Descriptions are included only on large debits; callers that
-    send this to an external agent must redact account numbers first.
+    send this to an external agent should pass `redact`, which is applied to
+    each description before it is shortened so a number cannot be cut in half
+    and slip past the redactor.
     """
     recent = [
         t for t in transactions
@@ -661,7 +663,7 @@ def summarise_spending(transactions, start, end, weekly_budget):
             "date": t["date"].isoformat(),
             "amount": round(t["debit"], 2),
             "category": t.get("category") or "Other",
-            "description": (t.get("description") or "")[:80],
+            "description": (redact or str)(t.get("description") or "")[:80],
         })
     flagged.sort(key=lambda row: row["amount"], reverse=True)
 

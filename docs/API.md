@@ -32,6 +32,25 @@ Every route, including `/health`, requires:
 Authorization: Bearer $JARVIS_API_TOKEN
 ```
 
+### Per-bot tokens, limits and scopes
+
+Prefer `JARVIS_API_TOKENS="career:<tok>,study:<tok>,money:<tok>"` (each token 32+ chars).
+The name is recorded as the audit `actor` (a body `actor` is ignored) and limits the routes:
+
+| Token | Routes |
+|-------|--------|
+| career | `/health`, `/flags`, `/context`, `PATCH /mentor`, `PATCH`/`POST /internships` |
+| study | `/health`, `/flags`, `/context` |
+| money | `/health`, `POST /spend`, `/finance*` |
+| admin, or legacy `JARVIS_API_TOKEN` | everything |
+
+Other guards: 10 failed logins in 5 minutes blocks a client (429); `/ask` is capped at 30
+per day and `/memory/search` at 100 (`JARVIS_API_ASK_DAILY`, `JARVIS_API_MEMORY_DAILY`);
+bodies over 16 KB get 413; `POST /spend` is audited and an identical entry within 60 s is
+returned with `"duplicate": true` instead of being logged again. Writes to
+`term_context.json` refuse to run if the file is unreadable and keep `term_context.json.bak`.
+Install `waitress` in the VPS venv to serve with it instead of Werkzeug's dev server.
+
 Set `JARVIS_API_TOKEN` in the VPS `.env` (the file is gitignored). Generate one with:
 
 ```
