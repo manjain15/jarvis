@@ -209,9 +209,12 @@ Return ONLY the JSON array. No commentary, no code fences."""
 
 
 def _sync_calendar_after_assessment():
-    """Best-effort calendar upsert after assessment add/update/submit. Never raises."""
+    """Best-effort calendar upsert after assessment add/update/submit. Never raises.
+    No-op while CALENDAR_DEADLINE_SYNC is False (UNSW ICS covers assessment dates)."""
     try:
-        from jarvis_calendar import sync_term_deadlines_to_calendar
+        from jarvis_calendar import sync_term_deadlines_to_calendar, CALENDAR_DEADLINE_SYNC
+        if not CALENDAR_DEADLINE_SYNC:
+            return
         sync_term_deadlines_to_calendar(force=True)
     except Exception:
         pass

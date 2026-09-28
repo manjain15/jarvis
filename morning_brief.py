@@ -143,8 +143,9 @@ except Exception:
     FOLLOWUPS_AVAILABLE = False
 
 try:
-    from jarvis_calendar import sync_term_deadlines_to_calendar
-    CALENDAR_SYNC_AVAILABLE = True
+    from jarvis_calendar import sync_term_deadlines_to_calendar, CALENDAR_DEADLINE_SYNC
+    # Feature gated off: UNSW ICS already syncs assessment dates.
+    CALENDAR_SYNC_AVAILABLE = bool(CALENDAR_DEADLINE_SYNC)
 except Exception:
     CALENDAR_SYNC_AVAILABLE = False
 
@@ -992,7 +993,8 @@ def run_brief():
         except Exception as e:
             print(f"⚠️   Mentor follow-up draft skipped: {e}")
 
-    # Sync assessment/fee deadlines to Google Calendar (once per day). Fail-soft.
+    # Calendar deadline sync gated by CALENDAR_DEADLINE_SYNC (default False —
+    # UNSW ICS already covers assessment dates). Fail-soft no-op when disabled.
     if CALENDAR_SYNC_AVAILABLE:
         try:
             sync_result = sync_term_deadlines_to_calendar(force=False)

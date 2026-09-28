@@ -240,8 +240,9 @@ def start_new_term(name: str, start_date: str, subjects: list = None):
     mutate_context(_mutate)
     print(f"✅ Started new term: {name}")
     try:
-        from jarvis_calendar import sync_term_deadlines_to_calendar
-        sync_term_deadlines_to_calendar(force=True)
+        from jarvis_calendar import sync_term_deadlines_to_calendar, CALENDAR_DEADLINE_SYNC
+        if CALENDAR_DEADLINE_SYNC:
+            sync_term_deadlines_to_calendar(force=True)
     except Exception:
         pass
 
@@ -473,8 +474,9 @@ def mark_assessment_done(subject_code: str, assessment_name: str):
     if matched:
         print(f"✅ Marked {subject_code} — {matched['name']} as submitted")
         try:
-            from jarvis_calendar import sync_term_deadlines_to_calendar
-            sync_term_deadlines_to_calendar(force=True)
+            from jarvis_calendar import sync_term_deadlines_to_calendar, CALENDAR_DEADLINE_SYNC
+            if CALENDAR_DEADLINE_SYNC:
+                sync_term_deadlines_to_calendar(force=True)
         except Exception:
             pass
     else:

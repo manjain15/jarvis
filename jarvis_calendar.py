@@ -18,7 +18,7 @@ USAGE (CLI):
   python jarvis_calendar.py --tasks         # show pending tasks
   python jarvis_calendar.py --add-task "Follow up with Google mentor"
   python jarvis_calendar.py --block "9am-11am tomorrow" "Deep work - internship apps"
-  python jarvis_calendar.py --sync-deadlines  # upsert assessment/fee deadlines from term_context
+  python jarvis_calendar.py --sync-deadlines  # DISABLED by default (CALENDAR_DEADLINE_SYNC=False)
 """
 
 import datetime
@@ -471,6 +471,12 @@ Rules:
 # Upserts Google Calendar all-day events tagged with a [Jarvis] title prefix.
 # Event IDs live in data/calendar_sync.json so re-runs update rather than duplicate.
 # Only syncs dates that already exist in term_context — never invents fee/census dates.
+#
+# DISABLED by default: UNSW ICS already syncs assessment dates into Google Calendar,
+# so duplicate [Jarvis] events are unwanted. Keep helpers for manual cleanup /
+# re-enable later; all hooks no-op while CALENDAR_DEADLINE_SYNC is False.
+
+CALENDAR_DEADLINE_SYNC = False  # gate: set True (or env) to re-enable deadline upserts
 
 TITLE_PREFIX = "[Jarvis]"
 SYNC_FILE    = SCRIPT_DIR / "data" / "calendar_sync.json"
@@ -684,8 +690,15 @@ def sync_term_deadlines_to_calendar(force: bool = False) -> dict:
     fee/census deadlines present in term_context. Idempotent: stores event ids
     in data/calendar_sync.json. When force=False, skips if already run today
     (morning_brief daily gate). Returns a summary dict; never raises.
+
+    Gated by CALENDAR_DEADLINE_SYNC (default False) — UNSW ICS already covers
+    assessment dates, so this is a no-op unless explicitly re-enabled.
     """
     summary = {"synced": 0, "removed": 0, "skipped": None, "errors": []}
+
+    if not CALENDAR_DEADLINE_SYNC:
+        summary["skipped"] = "CALENDAR_DEADLINE_SYNC disabled (UNSW ICS covers assessment dates)"
+        return summary
 
     try:
         if not force and _already_synced_today():
@@ -748,6 +761,9 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.sync_deadlines:
+        if not CALENDAR_DEADLINE_SYNC:
+            print("⏭  Calendar deadline sync disabled (CALENDAR_DEADLINE_SYNC=False; UNSW ICS covers dates)")
+            raise SystemExit(0)
         result = sync_term_deadlines_to_calendar(force=True)
         if result.get("skipped") and not result["synced"]:
             print(f"⏭  {result['skipped']}")

@@ -121,11 +121,11 @@ Never write outside `/Users/manavjain/jarvis/`.
   if drafts 403). Manual: `python followups.py --draft` or Telegram `/draftmentor`.
 
 - **Calendar deadline sync** (`jarvis_calendar.sync_term_deadlines_to_calendar`):
-  upserts `[Jarvis]` all-day events for assessment dues + any fee/census dates
-  already in term_context (`deadlines[]` or `term.census_date` / `fee_due` /
-  `fee_deadline`). IDs in `data/calendar_sync.json`. Runs once/day from morning
-  brief; also on assessment apply / mark-done / new term. Manual:
-  `python jarvis_calendar.py --sync-deadlines`.
+  **DISABLED** (`CALENDAR_DEADLINE_SYNC = False`) — UNSW ICS already syncs
+  assessment dates into Google Calendar, so Jarvis no longer creates duplicate
+  `[Jarvis]` all-day events. Helpers remain gated off; morning_brief /
+  term_updates / term_context hooks no-op. Re-enable by setting the constant
+  True, then `python jarvis_calendar.py --sync-deadlines`.
 
 ## Git
 
