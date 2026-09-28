@@ -18,6 +18,8 @@ USAGE:
 
 import fcntl
 import json
+import os
+import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -41,8 +43,30 @@ def file_lock(target_path):
 
 
 def atomic_write_json(path, data):
-    """Writes JSON via temp-file + rename so readers never see a torn file."""
+    """Write JSON via a unique temp file, fsync, then rename.
+
+    A shared ``name.tmp`` lets two writers clobber the same temp file. The
+    file is fsynced before the replace so a crash cannot leave the
+    destination pointing at a half-written inode.
+    """
     path = Path(path)
-    tmp = path.parent / (path.name + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2, default=str))
-    tmp.replace(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(data, indent=2, default=str)
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        dir=path.parent,
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(tmp_name, 0o644)
+        os.replace(tmp_name, path)
+    except Exception:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise

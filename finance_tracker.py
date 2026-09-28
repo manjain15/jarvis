@@ -933,9 +933,10 @@ def summarise_spending(transactions, start, end, weekly_budget):
     (internet withdrawals, transfers, Osko/Sct withdrawals to an owner name,
     Revolut card top-ups). A refund credit that matches a counted debit
     reduces that category and total_spend, so the category totals still add
-    up to total_spend. Descriptions are included only on large debits that
-    remain after refunds; callers that send this to an external agent must
-    redact account numbers first.
+    up to total_spend. Descriptions on flagged rows are the full bank line.
+    Callers that send this to an external agent must redact sensitive text
+    before shortening it, so a number cut at a character limit cannot leave
+    a short digit fragment.
     """
     recent = _net_spending_debits(transactions, start, end)
 
@@ -958,7 +959,7 @@ def summarise_spending(transactions, start, end, weekly_budget):
             "date": t["date"].isoformat(),
             "amount": round(t["debit"], 2),
             "category": t.get("category") or "Other",
-            "description": (t.get("description") or "")[:80],
+            "description": t.get("description") or "",
         })
     flagged.sort(key=lambda row: row["amount"], reverse=True)
 

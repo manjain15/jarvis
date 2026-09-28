@@ -129,7 +129,8 @@ def test_memory_route_rejects_blank_query():
     assert "q is required" in res.get_json()["error"]
 
 
-def test_flags_context_memory_spend_are_wired(monkeypatch):
+def test_flags_context_memory_spend_are_wired(monkeypatch, tmp_path):
+    monkeypatch.setattr(agent_api, "AUDIT_FILE", tmp_path / "agent_api_audit.jsonl")
     with pytest.raises(ValueError):
         agent_api.search_memory_payload("  ")
 
@@ -152,7 +153,11 @@ def test_flags_context_memory_spend_are_wired(monkeypatch):
     mem = client.get("/memory/search?q=mentor&limit=2", headers=AUTH)
     assert mem.get_json()["text"] == "remembered"
 
-    spend = client.post("/spend", json={"amount": 4, "category": "Other", "note": "bus"}, headers=AUTH)
+    spend = client.post(
+        "/spend",
+        json={"actor": "money", "amount": 4, "category": "Other", "note": "bus"},
+        headers=AUTH,
+    )
     assert spend.status_code == 200
     assert spend.get_json()["entry"]["note"] == "bus"
 
@@ -582,3 +587,192 @@ def test_audit_failure_leaves_term_context_unchanged(tmp_path, monkeypatch):
     assert res.get_json()["error"] == "mentor update failed"
     assert path.read_text() == before
     assert not (tmp_path / "agent_api_audit.jsonl").exists()
+
+
+def test_malformed_authorization_headers():
+    client = _client()
+    assert client.get("/health", headers={"Authorization": "Bearer"}).status_code == 401
+    assert client.get("/health", headers={"Authorization": "Bearer "}).status_code == 401
+    assert client.get("/health", headers={"Authorization": "bearer "}).status_code == 401
+    assert client.get("/health", headers={"Authorization": "Basic dGVzdA=="}).status_code == 401
+    ok = client.get("/health", headers={"Authorization": f"bearer {TOKEN}"})
+    assert ok.status_code == 200
+    assert ok.get_json()["ok"] is True
+
+
+def test_non_object_json_is_400():
+    client = _client()
+    cases = [
+        ("post", "/ask", ["hi"]),
+        ("post", "/ask", "hi"),
+        ("post", "/ask", 1),
+        ("post", "/ask", True),
+        ("post", "/spend", ["4.00"]),
+        ("post", "/spend", "4.00"),
+        ("patch", "/mentor", ["career"]),
+        ("patch", "/internships", "Canva"),
+        ("post", "/internships", [1, 2]),
+    ]
+    for method, path, payload in cases:
+        res = getattr(client, method)(path, headers=AUTH, json=payload)
+        assert res.status_code == 400, (path, payload, res.status_code, res.get_json())
+        assert res.get_json()["error"] == "JSON object required"
+
+
+def test_corrupt_term_context_is_not_overwritten(tmp_path, monkeypatch):
+    path = tmp_path / "term_context.json"
+    path.write_text('{"internships": [{"company": "Canva"')
+    before = path.read_bytes()
+    monkeypatch.setattr(term_context, "CONTEXT_FILE", path)
+    monkeypatch.setattr(agent_api, "AUDIT_FILE", tmp_path / "agent_api_audit.jsonl")
+    res = _client().post("/internships", headers=AUTH, json={
+        "actor": "career",
+        "company": "Dolby",
+        "role": "Audio Intern",
+        "status": "applied",
+    })
+    assert res.status_code == 409
+    assert "refusing to overwrite" in res.get_json()["error"]
+    assert path.read_bytes() == before
+    assert not (tmp_path / "term_context.json.bak").exists()
+    assert not (tmp_path / "agent_api_audit.jsonl").exists()
+
+    path.write_text("[]")
+    before = path.read_bytes()
+    res = _client().patch("/mentor", headers=AUTH, json={
+        "actor": "career",
+        "notes": "should not land",
+    })
+    assert res.status_code == 409
+    assert path.read_bytes() == before
+
+
+def test_api_write_copies_a_backup_and_missing_file_still_creates(tmp_path, monkeypatch):
+    path = _seed(tmp_path, monkeypatch, mentor=_mentor(), internships=[_canva()])
+    before = path.read_text()
+    res = _client().patch("/mentor", headers=AUTH, json={
+        "actor": "career",
+        "notes": "updated",
+    })
+    assert res.status_code == 200
+    bak = tmp_path / "term_context.json.bak"
+    assert bak.read_text() == before
+    assert json.loads(path.read_text())["mentor"]["notes"] == "updated"
+    assert json.loads(bak.read_text())["internships"][0]["company"] == "Canva"
+
+    fresh = tmp_path / "empty"
+    fresh.mkdir()
+    missing = fresh / "term_context.json"
+    monkeypatch.setattr(term_context, "CONTEXT_FILE", missing)
+    monkeypatch.setattr(agent_api, "AUDIT_FILE", fresh / "agent_api_audit.jsonl")
+    created = _client().post("/internships", headers=AUTH, json={
+        "actor": "career",
+        "company": "Dolby",
+        "role": "Audio Intern",
+        "status": "applied",
+    })
+    assert created.status_code == 201
+    assert json.loads(missing.read_text())["internships"][0]["company"] == "Dolby"
+    assert not (fresh / "term_context.json.bak").exists()
+
+
+def test_spend_actor_defaults_and_stays_overridable():
+    assert agent_api.default_spend_actor("legacy-secret", "legacy-secret") == "owner"
+    assert agent_api.default_spend_actor("bot-secret", "legacy-secret") == "unknown"
+    assert agent_api.default_spend_actor("", "legacy-secret") == "unknown"
+    assert agent_api.default_spend_actor(None, None) == "unknown"
+    assert agent_api.spend_actor(
+        {"amount": 1, "actor": "  money  "}, "bot-secret", "legacy-secret",
+    ) == "money"
+    assert agent_api.spend_actor({"amount": 1}, "bot-secret", "legacy-secret") == "unknown"
+    assert agent_api.spend_actor({}, "legacy-secret", "legacy-secret") == "owner"
+    with pytest.raises(ValueError):
+        agent_api.spend_actor({"actor": "has spaces"}, "legacy-secret", "legacy-secret")
+
+
+def test_spend_without_actor_audits_the_legacy_owner(tmp_path, monkeypatch):
+    import live_spend
+    monkeypatch.setattr(live_spend, "SPEND_FILE", tmp_path / "live_spend.jsonl")
+    monkeypatch.setattr(agent_api, "AUDIT_FILE", tmp_path / "agent_api_audit.jsonl")
+    res = _client().post("/spend", json={"amount": 3, "category": "Other", "note": "bus"}, headers=AUTH)
+    assert res.status_code == 200
+    audit = _audit_lines(tmp_path)
+    assert len(audit) == 1
+    assert audit[0]["action"] == "spend"
+    assert audit[0]["actor"] == "owner"
+    assert audit[0]["target"]["note"] == "bus"
+    assert len((tmp_path / "live_spend.jsonl").read_text().splitlines()) == 1
+
+
+def test_spend_records_actor_audits_and_dedupes(tmp_path, monkeypatch):
+    import live_spend
+    monkeypatch.setattr(live_spend, "SPEND_FILE", tmp_path / "live_spend.jsonl")
+    monkeypatch.setattr(agent_api, "AUDIT_FILE", tmp_path / "agent_api_audit.jsonl")
+    client = _client()
+    body = {
+        "actor": "money",
+        "amount": 4.5,
+        "category": "food & dining",
+        "note": "coffee",
+        "reason": "back tap",
+    }
+    headers = {**AUTH, "Idempotency-Key": "spend-001"}
+    first = client.post("/spend", json=body, headers=headers)
+    assert first.status_code == 200
+    second = client.post("/spend", json=body, headers=headers)
+    assert second.status_code == 200
+    assert second.get_json() == first.get_json()
+    spend_lines = (tmp_path / "live_spend.jsonl").read_text().splitlines()
+    assert len([line for line in spend_lines if line.strip()]) == 1
+
+    audit = _audit_lines(tmp_path)
+    assert len(audit) == 1
+    assert audit[0]["actor"] == "money"
+    assert audit[0]["action"] == "spend"
+    assert audit[0]["reason"] == "back tap"
+    assert audit[0]["idempotency_key"] == "spend-001"
+    assert audit[0]["target"]["category"] == "Food & dining"
+    assert audit[0]["target"]["amount"] == 4.5
+    assert audit[0]["old"] is None
+
+    replayed = client.post("/spend", json=body, headers=AUTH)
+    assert replayed.status_code == 200
+    assert replayed.get_json()["entry"]["note"] == "coffee"
+    assert len((tmp_path / "live_spend.jsonl").read_text().splitlines()) == 1
+    assert len(_audit_lines(tmp_path)) == 1
+
+    other = client.post("/spend", json=body, headers={**AUTH, "Idempotency-Key": "spend-002"})
+    assert other.status_code == 200
+    assert len((tmp_path / "live_spend.jsonl").read_text().splitlines()) == 2
+
+    clash = client.post("/spend", json={**body, "amount": 9}, headers=headers)
+    assert clash.status_code == 409
+    assert len((tmp_path / "live_spend.jsonl").read_text().splitlines()) == 2
+
+    bad_actor = client.post("/spend", json={
+        "actor": "has spaces", "amount": 1, "category": "Other",
+    }, headers=AUTH)
+    assert bad_actor.status_code == 400
+    assert len((tmp_path / "live_spend.jsonl").read_text().splitlines()) == 2
+
+    path = tmp_path / "agent_api_audit.jsonl"
+    aged = []
+    for line in path.read_text().splitlines():
+        row = json.loads(line)
+        ts = datetime.datetime.fromisoformat(row["ts"]) - datetime.timedelta(seconds=61)
+        row["ts"] = ts.isoformat(timespec="seconds")
+        aged.append(row)
+    path.write_text("".join(json.dumps(row) + "\n" for row in aged))
+    again = client.post("/spend", json={
+        "actor": "money",
+        "amount": 4.5,
+        "category": "Food & dining",
+        "note": "coffee",
+    }, headers=AUTH)
+    assert again.status_code == 200
+    assert len((tmp_path / "live_spend.jsonl").read_text().splitlines()) == 3
+
+    keyed = client.post("/spend", json=body, headers=headers)
+    assert keyed.status_code == 200
+    assert keyed.get_json() == first.get_json()
+    assert len((tmp_path / "live_spend.jsonl").read_text().splitlines()) == 3

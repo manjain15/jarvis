@@ -32,7 +32,9 @@ external corrections hit the same locked, atomic file the flags read.
 
 import json
 import datetime
+import os
 import re
+import tempfile
 from pathlib import Path
 
 import pytz
@@ -88,13 +90,69 @@ class TermRecordConflict(Exception):
     """The internship match is ambiguous, or that application already exists."""
 
 
+class TermContextUnreadable(Exception):
+    """term_context.json is present but cannot be read as a JSON object.
+
+    Writers must raise this and leave the file untouched. Treating a
+    truncated file as ``{}`` and saving it drops every record except the
+    one the caller just added.
+    """
+
+
 # ── Loader ────────────────────────────────────────────────────────────────────
 
 def load_context() -> dict:
+    """Return term context. A missing file is an empty document.
+
+    A file that exists but cannot be parsed, or that is not a JSON object,
+    raises TermContextUnreadable. Callers that only display data may catch
+    that and continue; mutate_context does not.
+    """
     try:
-        return json.loads(CONTEXT_FILE.read_text())
-    except Exception:
+        raw = CONTEXT_FILE.read_text(encoding="utf-8")
+    except FileNotFoundError:
         return {}
+    except OSError as exc:
+        raise TermContextUnreadable(
+            "term_context.json exists but could not be read; refusing to overwrite"
+        ) from exc
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise TermContextUnreadable(
+            "term_context.json exists but could not be parsed; refusing to overwrite"
+        ) from exc
+    if not isinstance(data, dict):
+        raise TermContextUnreadable(
+            "term_context.json exists but is not a JSON object; refusing to overwrite"
+        )
+    return data
+
+
+def _backup_context_file():
+    """Copy term_context.json to term_context.json.bak before it is replaced."""
+    if not CONTEXT_FILE.exists():
+        return
+    dest = CONTEXT_FILE.parent / (CONTEXT_FILE.name + ".bak")
+    payload = CONTEXT_FILE.read_bytes()
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{dest.name}.",
+        suffix=".tmp",
+        dir=dest.parent,
+    )
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(tmp_name, 0o644)
+        os.replace(tmp_name, dest)
+    except Exception:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
 
 
 def mutate_context(mutate_fn):
@@ -103,10 +161,15 @@ def mutate_context(mutate_fn):
     the full load -> mutate -> save cycle so a concurrent cron job or
     Telegram command can't clobber this write. `mutate_fn(ctx)` mutates
     the loaded dict in place.
+
+    A missing file is created. A file that exists but will not parse raises
+    TermContextUnreadable and is not written. The previous bytes are copied
+    to term_context.json.bak before each successful replace.
     """
     with file_lock(CONTEXT_FILE):
         ctx = load_context()
         mutate_fn(ctx)
+        _backup_context_file()
         atomic_write_json(CONTEXT_FILE, ctx)
         return ctx
 
