@@ -250,10 +250,14 @@ the sheet cannot be read, `inventory` is `null` and `inventory_error` is
 
 ### Log a spend
 
-Same categories and validation as the Back Tap logger. `actor` is required
-(same rules as the other writes). Optional `reason` is stored in the audit
-log only. A successful call appends `data/agent_api_audit.jsonl` with
-`action: "spend"`.
+Same categories and validation as the Back Tap logger. `actor` is optional
+here (it stays required on mentor and internship writes). When it is omitted,
+the audit line uses `owner` if the request presented the legacy
+`JARVIS_API_TOKEN`, and `unknown` for any other token. A per-bot token map
+can replace `default_spend_actor` without changing this route. A non-blank
+`actor` is stored as sent, with the same character rules as the other writes.
+Optional `reason` is stored in the audit log only. A successful call appends
+`data/agent_api_audit.jsonl` with `action: "spend"`.
 
 Send `Idempotency-Key` to make a retry return the original JSON instead of
 logging a second spend. Reusing that key for a different amount, category,

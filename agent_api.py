@@ -95,6 +95,18 @@ def api_token():
     return os.environ.get("JARVIS_API_TOKEN", "").strip()
 
 
+def _presented_bearer(authorization_header):
+    """Return the Bearer credential, or '' when the header is not Bearer.
+
+    Does not check the secret. Spend uses it only to choose a default actor.
+    """
+    header = authorization_header or ""
+    parts = header.split(None, 1)
+    if len(parts) != 2 or parts[0].lower() != "bearer":
+        return ""
+    return parts[1].strip()
+
+
 def bearer_matches(authorization_header, expected):
     """
     Return True when the Authorization header carries expected as a Bearer token.
@@ -400,10 +412,38 @@ def _find_spend_replay(identity, key):
     return None
 
 
-def apply_spend(body, idempotency_key=None):
+def default_spend_actor(presented_token, legacy_token):
+    """Actor used when POST /spend omits one.
+
+    The configured JARVIS_API_TOKEN is the legacy owner credential, so a
+    request that presents it is audited as 'owner'. Any other token stays
+    'unknown'. Replace this function when per-bot tokens should name the
+    actor; an explicit body actor still wins in spend_actor.
+    """
+    presented = (presented_token or "").strip()
+    legacy = (legacy_token or "").strip()
+    if not presented or not legacy:
+        return "unknown"
+    same = hmac.compare_digest(
+        hashlib.sha256(presented.encode("utf-8")).digest(),
+        hashlib.sha256(legacy.encode("utf-8")).digest(),
+    )
+    return "owner" if same else "unknown"
+
+
+def spend_actor(body, presented_token=None, legacy_token=None):
+    """Audit name for a spend. A non-blank body actor wins over the default."""
+    raw = body.get("actor") if isinstance(body, dict) else None
+    if isinstance(raw, str) and raw.strip():
+        return _parse_actor(raw)
+    return default_spend_actor(presented_token, legacy_token)
+
+
+def apply_spend(body, idempotency_key=None, presented_token=None, legacy_token=None):
     """Log one spend, audit who logged it, and collapse retries.
 
-    `actor` is required, same rule as the other writes. Optional `reason`
+    `actor` is optional. When it is omitted, spend_actor records 'owner'
+    for the legacy API token and 'unknown' otherwise. Optional `reason`
     is audit-only. Idempotency-Key, when present, replays the original
     response. Without it, an identical amount, category, and note inside
     60 seconds is not written a second time.
@@ -411,7 +451,7 @@ def apply_spend(body, idempotency_key=None):
     _json_object(body)
     _reject_unknown_fields(body, _SPEND_BODY_KEYS)
     _reject_nulls(body)
-    actor = _actor(body)
+    actor = spend_actor(body, presented_token, legacy_token)
     reason = _reason(body)
     key = _clean_idempotency_key(idempotency_key)
     from live_spend import normalise_spend
@@ -456,17 +496,21 @@ def _reject_unknown_fields(body, allowed):
         raise ValueError(f"unknown field(s): {', '.join(extra)}")
 
 
-def _actor(body):
-    """Return the external agent name recorded in the audit log."""
-    if "actor" not in body or body["actor"] is None:
-        raise ValueError("actor is required")
-    raw = body["actor"]
+def _parse_actor(raw):
+    """Validate an actor name. Blank input is rejected; callers default first."""
     if not isinstance(raw, str) or not raw.strip():
         raise ValueError("actor is required")
     actor = raw.strip()
     if not _ACTOR_RE.fullmatch(actor):
         raise ValueError("actor must be 1-40 characters (letters, digits, '.', '_', '-')")
     return actor
+
+
+def _actor(body):
+    """Return the external agent name recorded in the audit log."""
+    if not isinstance(body, dict) or "actor" not in body or body["actor"] is None:
+        raise ValueError("actor is required")
+    return _parse_actor(body["actor"])
 
 
 def _reason(body):
@@ -1117,7 +1161,12 @@ def create_app(token=None):
         """Log one spend. Records actor in the audit log and collapses retries."""
         body = request.get_json(silent=True)
         try:
-            return jsonify(apply_spend(body, request.headers.get("Idempotency-Key")))
+            return jsonify(apply_spend(
+                body,
+                request.headers.get("Idempotency-Key"),
+                presented_token=_presented_bearer(request.headers.get("Authorization", "")),
+                legacy_token=expected,
+            ))
         except SpendConflict as e:
             return jsonify({"error": str(e)}), 409
         except ValueError as e:

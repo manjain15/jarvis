@@ -676,6 +676,34 @@ def test_api_write_copies_a_backup_and_missing_file_still_creates(tmp_path, monk
     assert not (fresh / "term_context.json.bak").exists()
 
 
+def test_spend_actor_defaults_and_stays_overridable():
+    assert agent_api.default_spend_actor("legacy-secret", "legacy-secret") == "owner"
+    assert agent_api.default_spend_actor("bot-secret", "legacy-secret") == "unknown"
+    assert agent_api.default_spend_actor("", "legacy-secret") == "unknown"
+    assert agent_api.default_spend_actor(None, None) == "unknown"
+    assert agent_api.spend_actor(
+        {"amount": 1, "actor": "  money  "}, "bot-secret", "legacy-secret",
+    ) == "money"
+    assert agent_api.spend_actor({"amount": 1}, "bot-secret", "legacy-secret") == "unknown"
+    assert agent_api.spend_actor({}, "legacy-secret", "legacy-secret") == "owner"
+    with pytest.raises(ValueError):
+        agent_api.spend_actor({"actor": "has spaces"}, "legacy-secret", "legacy-secret")
+
+
+def test_spend_without_actor_audits_the_legacy_owner(tmp_path, monkeypatch):
+    import live_spend
+    monkeypatch.setattr(live_spend, "SPEND_FILE", tmp_path / "live_spend.jsonl")
+    monkeypatch.setattr(agent_api, "AUDIT_FILE", tmp_path / "agent_api_audit.jsonl")
+    res = _client().post("/spend", json={"amount": 3, "category": "Other", "note": "bus"}, headers=AUTH)
+    assert res.status_code == 200
+    audit = _audit_lines(tmp_path)
+    assert len(audit) == 1
+    assert audit[0]["action"] == "spend"
+    assert audit[0]["actor"] == "owner"
+    assert audit[0]["target"]["note"] == "bus"
+    assert len((tmp_path / "live_spend.jsonl").read_text().splitlines()) == 1
+
+
 def test_spend_records_actor_audits_and_dedupes(tmp_path, monkeypatch):
     import live_spend
     monkeypatch.setattr(live_spend, "SPEND_FILE", tmp_path / "live_spend.jsonl")
@@ -721,8 +749,11 @@ def test_spend_records_actor_audits_and_dedupes(tmp_path, monkeypatch):
     assert clash.status_code == 409
     assert len((tmp_path / "live_spend.jsonl").read_text().splitlines()) == 2
 
-    missing_actor = client.post("/spend", json={"amount": 1, "category": "Other"}, headers=AUTH)
-    assert missing_actor.status_code == 400
+    bad_actor = client.post("/spend", json={
+        "actor": "has spaces", "amount": 1, "category": "Other",
+    }, headers=AUTH)
+    assert bad_actor.status_code == 400
+    assert len((tmp_path / "live_spend.jsonl").read_text().splitlines()) == 2
 
     path = tmp_path / "agent_api_audit.jsonl"
     aged = []
