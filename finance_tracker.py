@@ -588,14 +588,20 @@ def get_finance_summary():
 
     lines.append("SPENDING (last 7 days):")
 
-    tracked_cats = ["Food & dining", "Entertainment", "Shopping", "Sport & leisure", "Education", "Subscriptions"]
+    tracked_cats = [
+        "Food & dining", "Entertainment", "Shopping", "Sport & leisure",
+        "Education", "Transport", "Subscriptions",
+    ]
     for cat in tracked_cats:
         amt = spending["category_totals"].get(cat, 0)
         if amt > 0:
             lines.append(f"  {cat:<18} ${amt:.2f}")
 
-    other = sum(v for k, v in spending["category_totals"].items()
-                if k not in tracked_cats and k != "Other")
+    other = spending["category_totals"].get("Other", 0)
+    other += sum(
+        v for k, v in spending["category_totals"].items()
+        if k not in tracked_cats and k not in ("Other", INTERNAL_CATEGORY)
+    )
     if other > 0:
         lines.append(f"  {'Other':<18} ${other:.2f}")
 

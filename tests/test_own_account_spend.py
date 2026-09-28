@@ -250,6 +250,43 @@ def test_reselling_still_ignores_own_topups_and_counts_real_cashflow(tmp_path, m
     assert cash["net"] == 10.0
 
 
+def test_morning_brief_week_lists_genuine_categories_only(tmp_path, monkeypatch):
+    everyday = tmp_path / "everyday.csv"
+    _write_stgeorge(everyday, _week_rows())
+    monkeypatch.setattr(finance_tracker, "EVERYDAY_CSV", everyday)
+    monkeypatch.setattr(finance_tracker, "SAVINGS1_CSV", tmp_path / "savings1.csv")
+    monkeypatch.setattr(finance_tracker, "REVOLUT_CSV", tmp_path / "revolut.csv")
+    monkeypatch.setattr(finance_tracker, "INVESTING_CSV", tmp_path / "investing.csv")
+    monkeypatch.setattr(finance_tracker, "LIVE_SPEND_AVAILABLE", False)
+
+    class FrozenDateTime(datetime.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            naive = datetime.datetime(2026, 9, 28, 8, 0, 0)
+            if tz is None:
+                return naive
+            return tz.localize(naive)
+
+    monkeypatch.setattr(finance_tracker.datetime, "datetime", FrozenDateTime)
+    text = finance_tracker.get_finance_summary()
+
+    def line_amount(label):
+        for line in text.splitlines():
+            if line.strip().startswith(label):
+                return line
+        return ""
+
+    assert "$254.95" in line_amount("Entertainment")
+    assert "$11.70" in line_amount("Transport")
+    assert "$38.60" in line_amount("Other")
+    assert "$305.25" in line_amount("Total spend")
+    assert "5000" not in text
+    assert "6000" not in text
+    assert "Revolut" not in text
+    assert "Manav Jain" not in text
+    assert "Knockout" in text
+
+
 def test_savings_balance_is_unchanged_by_the_spend_filter(tmp_path, monkeypatch):
     savings = tmp_path / "savings1.csv"
     monkeypatch.setattr(finance_tracker, "SAVINGS1_CSV", savings)
