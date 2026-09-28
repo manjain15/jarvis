@@ -359,6 +359,16 @@ def _read_usage(path):
     return data
 
 
+def _cap_from_env(name, default):
+    """Daily cap from the environment, or default when unset or not a whole number >= 1."""
+    raw = os.environ.get(name, "").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return value if value >= 1 else default
+
+
 def consume_daily_quota(kind):
     """
     Count one expensive call for today.
@@ -367,7 +377,10 @@ def consume_daily_quota(kind):
     already at the cap (the caller responds 429 and does not call out).
     The file is data/agent_api_usage.json. A new Sydney day resets it.
     """
-    caps = {"ask": ASK_DAILY_CAP, "memory_search": MEMORY_DAILY_CAP}
+    caps = {
+        "ask": _cap_from_env("JARVIS_API_ASK_DAILY", ASK_DAILY_CAP),
+        "memory_search": _cap_from_env("JARVIS_API_MEMORY_DAILY", MEMORY_DAILY_CAP),
+    }
     if kind not in caps:
         raise ValueError(f"unknown quota {kind}")
     cap = caps[kind]
