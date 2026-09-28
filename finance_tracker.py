@@ -53,7 +53,8 @@ SAVINGS1_CSV  = FINANCE_DIR / "savings1.csv"
 INVESTING_CSV = FINANCE_DIR / "investing.csv"
 REVOLUT_CSV   = FINANCE_DIR / "revolut.csv"
 
-# Transfers to/from these names are moves between your own accounts, not sales/purchases.
+# Default owner name for Revolut transfers. Live checks use get_own_account_rules()
+# so term_context.json "own_accounts" can override this without a code change.
 REVOLUT_OWN_NAMES = ("manav jain",)
 
 FINANCE_DIR.mkdir(exist_ok=True)
@@ -64,12 +65,23 @@ TIMEZONE = pytz.timezone(config.TIMEZONE)
 # Goals themselves live in term_context.json (single source of truth, editable
 # via proposals) instead of being hardcoded here.
 try:
-    from term_context import get_finance_goals
+    from term_context import get_finance_goals, get_own_account_rules
 except Exception:
     def get_finance_goals():
         return {
             "savings_goal": 35000.00, "savings_deadline": "2027-01-01",
             "monthly_income": 2800.00, "monthly_budget": 300.00, "weekly_budget": 75.00,
+        }
+
+    def get_own_account_rules():
+        """Fallback when term_context cannot be imported. Mirrors its defaults."""
+        return {
+            "owner_names": ["manav jain"],
+            "withdrawal_markers": [
+                "osko withdrawal", "internet withdrawal", "sct withdrawal",
+            ],
+            "card_patterns": ["revolut**5228", "revolut"],
+            "card_rails": ["visa purchase", "eftpos", "top-up", "topup"],
         }
 
 
@@ -134,7 +146,7 @@ CATEGORY_RULES = [
         "apple.com/bill", "itunes", "google play",
         "bar ", "pub ", "club ", "nightclub", "drinks",
         "bowling", "escape room", "laser tag", "entertainment",
-        "ko ticket", "ko ", "exodus", "concert", "festival", "show ", "rave",
+        "ko ticket", "knockout", "ko ", "exodus", "concert", "festival", "show ", "rave",
         "moshtix", "humanitix", "oztix",
     ]),
     ("Shopping", [
@@ -172,12 +184,84 @@ CATEGORY_RULES = [
 ]
 
 
+# Not a spending category. Own-account moves return this from categorise().
+INTERNAL_CATEGORY = "Internal transfer"
+
+# Description fragments that are internal no matter who the payee is.
+# "transfer" is the pre-existing morning-brief rule; internet withdrawals too.
+_ALWAYS_INTERNAL_MARKERS = ("internet withdrawal", "transfer")
+
+
+def _keyword_matches(description_lower, keyword):
+    """True when keyword occurs and is not stuck to a preceding letter.
+
+    Short tokens such as 'ko ' sit inside 'osko '. A plain substring check
+    was labelling every Osko withdrawal as Entertainment.
+    """
+    start = 0
+    while True:
+        idx = description_lower.find(keyword, start)
+        if idx < 0:
+            return False
+        if idx == 0 or not description_lower[idx - 1].isalpha():
+            return True
+        start = idx + 1
+
+
+def _is_own_card_topup(desc, rules):
+    """True for a card top-up of an account the owner already holds.
+
+    A masked descriptor (Revolut**5228) matches on its own. A bare merchant
+    name such as 'revolut' only matches on a card rail, so an Osko reference
+    that merely mentions Revolut is still spending.
+    """
+    patterns = [pat for pat in rules.get("card_patterns") or [] if pat and pat in desc]
+    if not patterns:
+        return False
+    if any("**" in pat for pat in patterns):
+        return True
+    rails = rules.get("card_rails") or []
+    return any(rail in desc for rail in rails)
+
+
+def _normalise_desc(description):
+    """Lowercase, and collapse the padded whitespace St. George puts in descriptions."""
+    return re.sub(r"\s+", " ", (description or "").lower()).strip()
+
+
+def _is_internal_spend(description):
+    """True for moves between the owner's own accounts, which are not spending.
+
+    Internet withdrawals and anything described as a transfer are always
+    internal. Osko, internet, and Sct withdrawals are internal when the payee
+    is an owner name, wherever that name sits in the description. Card top-ups
+    of an own account (Revolut) are internal too. Names and patterns come from
+    term_context.get_own_account_rules().
+    """
+    desc = _normalise_desc(description)
+    if any(marker in desc for marker in _ALWAYS_INTERNAL_MARKERS):
+        return True
+    rules = get_own_account_rules()
+    names = rules.get("owner_names") or []
+    markers = rules.get("withdrawal_markers") or []
+    if names and any(marker in desc for marker in markers) and any(name in desc for name in names):
+        return True
+    return _is_own_card_topup(desc, rules)
+
+
 def categorise(description):
-    """Returns a category string for a transaction description."""
-    desc_lower = description.lower()
+    """Return a category string for a transaction description.
+
+    Own-account transfers return 'Internal transfer' before any keyword rule,
+    so a self-Osko that mentions Kmart or sits inside the 'osko ' token never
+    lands in a spending category.
+    """
+    if _is_internal_spend(description):
+        return INTERNAL_CATEGORY
+    desc_lower = _normalise_desc(description)
     for category, keywords in CATEGORY_RULES:
         for kw in keywords:
-            if kw in desc_lower:
+            if _keyword_matches(desc_lower, kw):
                 return category
     return "Other"
 
@@ -242,6 +326,7 @@ def parse_revolut_csv(filepath):
     if not filepath.exists():
         return transactions
 
+    owner_names = get_own_account_rules().get("owner_names") or REVOLUT_OWN_NAMES
     with open(filepath, newline="", encoding="utf-8-sig") as f:
         for idx, row in enumerate(csv.DictReader(f)):
             try:
@@ -260,7 +345,7 @@ def parse_revolut_csv(filepath):
                 kind = (row.get("Type") or "").strip().lower()
                 internal = kind == "topup" or (
                     kind == "transfer"
-                    and any(n in description.lower() for n in REVOLUT_OWN_NAMES)
+                    and any(n in description.lower() for n in owner_names)
                 )
 
                 transactions.append({
@@ -298,6 +383,10 @@ def analyse_spending(transactions, days=7):
     """
     Analyses spending from the everyday account over the last N days.
     Returns a dict with category totals, big transactions, and overall total.
+
+    Own-account transfers (see _is_internal_spend) are left out of the totals,
+    the category breakdown, and the flagged debits. That is the same filter
+    summarise_spending uses for GET /finance.
     """
     today    = datetime.datetime.now(TIMEZONE).date()
     cutoff   = today - datetime.timedelta(days=days)
@@ -306,7 +395,7 @@ def analyse_spending(transactions, days=7):
         t for t in transactions
         if t["date"] >= cutoff
         and t["debit"] > 0
-        and "internet withdrawal" not in t["description"].lower()
+        and not _is_internal_spend(t.get("description", ""))
     ]
 
     # Category totals
@@ -315,18 +404,10 @@ def analyse_spending(transactions, days=7):
         cat = t["category"]
         category_totals[cat] = category_totals.get(cat, 0) + t["debit"]
 
-    # Big transactions (over $50, excluding internal transfers)
-    big_transactions = [
-        t for t in recent
-        if t["debit"] >= 80
-        and "internet withdrawal" not in t["description"].lower()
-        and "transfer" not in t["description"].lower()
-        and "osko withdrawal" not in t["description"].lower()
-    ]
+    # Big transactions ($80+, own-account transfers already removed)
+    big_transactions = [t for t in recent if t["debit"] >= 80]
 
-    total_spend = sum(t["debit"] for t in recent
-                      if "internet withdrawal" not in t["description"].lower()
-                      and "transfer" not in t["description"].lower())
+    total_spend = sum(t["debit"] for t in recent)
 
     return {
         "category_totals": category_totals,
@@ -507,14 +588,20 @@ def get_finance_summary():
 
     lines.append("SPENDING (last 7 days):")
 
-    tracked_cats = ["Food & dining", "Entertainment", "Shopping", "Sport & leisure", "Education", "Subscriptions"]
+    tracked_cats = [
+        "Food & dining", "Entertainment", "Shopping", "Sport & leisure",
+        "Education", "Transport", "Subscriptions",
+    ]
     for cat in tracked_cats:
         amt = spending["category_totals"].get(cat, 0)
         if amt > 0:
             lines.append(f"  {cat:<18} ${amt:.2f}")
 
-    other = sum(v for k, v in spending["category_totals"].items()
-                if k not in tracked_cats and k != "Other")
+    other = spending["category_totals"].get("Other", 0)
+    other += sum(
+        v for k, v in spending["category_totals"].items()
+        if k not in tracked_cats and k not in ("Other", INTERNAL_CATEGORY)
+    )
     if other > 0:
         lines.append(f"  {'Other':<18} ${other:.2f}")
 
@@ -620,20 +707,15 @@ def get_finance_summary():
     return "\n".join(lines)
 
 
-def _is_internal_spend(description):
-    """True for moves between the owner's own accounts, which are not spending."""
-    desc = (description or "").lower()
-    return "internet withdrawal" in desc or "transfer" in desc
-
-
 def summarise_spending(transactions, start, end, weekly_budget):
     """
     Category totals and weekly-budget comparison for an inclusive date range.
 
-    Drops the same internal transfers analyse_spending leaves out of total_spend
-    (internet withdrawals and transfers) so the category totals add up to
-    total_spend. Descriptions are included only on large debits; callers that
-    send this to an external agent must redact account numbers first.
+    Drops the same own-account transfers analyse_spending leaves out
+    (internet withdrawals, transfers, Osko/Sct withdrawals to an owner name,
+    Revolut card top-ups) so the category totals add up to total_spend.
+    Descriptions are included only on large debits; callers that send this
+    to an external agent must redact account numbers first.
     """
     recent = [
         t for t in transactions
@@ -655,7 +737,7 @@ def summarise_spending(transactions, start, end, weekly_budget):
 
     flagged = []
     for t in recent:
-        if t["debit"] < 80 or "osko withdrawal" in t.get("description", "").lower():
+        if t["debit"] < 80:
             continue
         flagged.append({
             "date": t["date"].isoformat(),

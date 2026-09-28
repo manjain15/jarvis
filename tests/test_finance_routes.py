@@ -237,6 +237,63 @@ def test_finance_bundle_isolates_section_errors(tmp_path, monkeypatch):
     assert ACCOUNT not in res.get_data(as_text=True)
 
 
+def test_own_account_transfers_are_not_spending(tmp_path, monkeypatch):
+    """The 22–28 Sep 2026 pattern: self-Osko and Revolut top-ups are not spend.
+
+    Dated on today so the default 7-day window includes them. GET /finance
+    and GET /finance/spending share summarise_spending.
+    """
+    today = _today()
+    everyday, savings = _patch_files(monkeypatch, tmp_path)
+    monkeypatch.setattr(agent_api, "load_reselling_inventory", lambda: {"net_pl": 0})
+
+    def row(description, debit, credit=""):
+        return [_dmy(today), description, debit, credit, "1000.00"]
+
+    _write_csv(everyday, [
+        row("Osko Withdrawal 22Sep Knockout R Jaiswal", "120.00"),
+        row("Osko Withdrawal 23Sep Knockout R Jaiswal", "120.00"),
+        row("Osko Withdrawal 24Sep Doomsday Tix Abhishek Goyal", "25.00"),
+        row("Visa Purchase 24Sep Playstation London", "14.95"),
+        row("Visa Purchase 24Sep Paypal *Guzmanygome", "3.60"),
+        row("Visa Purchase 22Sep Tfnsw Opal", "6.90"),
+        row("Visa Purchase 23Sep Tfnsw Opal", "4.80"),
+        row("Osko Withdrawal 25Sep Change For Hot Wheels W Tynan", "10.00"),
+        row("Osko Withdrawal 24Sep12:03 Kmart 30Th Manav Jain", "5000.00"),
+        row("Osko Withdrawal 24Sep12:12 Test Manav Jain", "1.00"),
+        row("Osko Withdrawal 27Sep20:42 Op 17 Blisters Manav Jain", "54.00"),
+        row("Visa Purchase 24Sep Revolut**5228* Melbourne", "6000.00"),
+        row("Visa Purchase 22Sep Revolut**5228* Melbourne", "390.00"),
+        row("Visa Purchase 22Sep Revolut**5228* Melbourne", "135.00"),
+        row("Sct Deposit 24Sep Sent From Revolut Manav Jain", "", "1.00"),
+    ])
+    _write_csv(savings, [[_dmy(today), "Interest", "", "1.00", "8000.00"]])
+
+    client = _client()
+    spending = client.get("/finance/spending", headers=AUTH)
+    assert spending.status_code == 200
+    body = spending.get_json()
+    assert body["total_spend"] == 305.25
+    assert body["by_category"] == {
+        "Entertainment": 254.95,
+        "Other": 38.60,
+        "Transport": 11.70,
+    }
+    assert sorted(item["amount"] for item in body["flagged"]) == [120.0, 120.0]
+    text = spending.get_data(as_text=True).lower()
+    assert "revolut" not in text
+    assert "manav" not in text
+    assert "knockout" in text
+
+    bundle = client.get("/finance", headers=AUTH)
+    assert bundle.status_code == 200
+    bundled = bundle.get_json()
+    assert bundled["spending"]["total_spend"] == 305.25
+    assert bundled["savings"]["balance"] == 8000.0
+    assert bundled["savings"]["available"] is True
+    assert "revolut" not in bundle.get_data(as_text=True).lower()
+
+
 def test_redact_leaves_dates_and_amounts():
     payload = {"when": "2026-09-28", "amount": 22.5, "note": f"paid {ACCOUNT}"}
     cleaned = agent_api.redact_account_numbers(payload)
