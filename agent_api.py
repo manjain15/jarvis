@@ -19,8 +19,8 @@ Every route, including /health, requires:
 
 JARVIS_API_TOKEN is the legacy owner token (full access, audit actor
 "owner"). JARVIS_API_TOKENS is optional per-bot access, formatted
-"career:<token>,study:<token>,money:<token>". The audit actor comes from
-the token that matched. An "actor" field in the body is ignored.
+"career:<token>,study:<token>,money:<token>,coach:<token>,phone:<token>".
+The audit actor comes from the token that matched. An "actor" field in the body is ignored.
 Each bot's routes are BOT_ROUTE_ALLOWLIST. A route outside that list is 403.
 
 Tokens must be at least 32 characters. Comparison is constant-time.
@@ -39,6 +39,8 @@ COST:
   GET /finance* is read-only. It reads local CSVs and term_context goals.
   Reselling inventory also reads the Google Sheet once per call. No Anthropic.
   A weekly Money check should call GET /finance, not poll it.
+  POST /events (phone Shortcuts) and GET /today read and write the daily
+  ledger (ledger.py, data/ledger/). No Anthropic.
 
 SETUP:
   Add JARVIS_API_TOKEN to .env (32+ characters). Optionally add
@@ -83,9 +85,12 @@ DEFAULT_PORT = 5557
 # not listed: only the legacy JARVIS_API_TOKEN (actor "owner") can call them,
 # unless you add the path to a bot here.
 BOT_ROUTE_ALLOWLIST = {
-    "career": ("/health", "/flags", "/context", "/mentor", "/internships"),
-    "study": ("/health", "/flags", "/context"),
-    "money": ("/health", "/finance", "/spend", "/flags"),
+    "career": ("/health", "/flags", "/context", "/mentor", "/internships", "/today"),
+    "study": ("/health", "/flags", "/context", "/today"),
+    "money": ("/health", "/finance", "/spend", "/flags", "/today"),
+    "coach": ("/health", "/flags", "/context", "/today"),
+    # iOS Shortcuts: wake, gym arrival, steps, sleep. Write-only.
+    "phone": ("/health", "/events"),
 }
 OWNER_ACTOR = "owner"
 MIN_TOKEN_LENGTH = 32
@@ -659,6 +664,19 @@ def search_memory_payload(query, limit=5):
     from jarvis_mem0 import search_memories
     text = search_memories(query, limit=limit) or ""
     return {"query": query, "limit": limit, "text": text}
+
+
+def record_ledger_event(body):
+    """Validate and store one phone event in today's ledger. Raises ValueError on bad input."""
+    from ledger import record_event
+    day = record_event(body)
+    return {"ok": True, "date": day["date"], "type": body["type"]}
+
+
+def get_today_payload():
+    """Today's commitments and debt from the ledger."""
+    from ledger import today_payload
+    return today_payload()
 
 
 def log_spend_entry(amount, category, note=""):
@@ -1553,6 +1571,27 @@ def create_app(token=None, bot_tokens=None):
         except Exception as e:
             print(f"⚠️  {label} failed: {e}")
             return jsonify({"error": f"{label} failed"}), 500
+
+    @app.post("/events")
+    def events():
+        """One evidence event from the phone (wake, gym_arrive, steps, sleep)."""
+        body = request.get_json(silent=True)
+        try:
+            return jsonify(record_ledger_event(body))
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        except Exception as e:
+            print(f"⚠️  /events failed: {e}")
+            return jsonify({"error": "event failed"}), 500
+
+    @app.get("/today")
+    def today():
+        """Today's commitments, evidence state, and carried debt."""
+        try:
+            return jsonify(get_today_payload())
+        except Exception as e:
+            print(f"⚠️  /today failed: {e}")
+            return jsonify({"error": "today failed"}), 500
 
     @app.patch("/mentor")
     def patch_mentor():

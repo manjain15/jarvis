@@ -1,0 +1,98 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Brief design</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  body { margin:0; padding:40px 16px; background:#000; font-family:Inter,-apple-system,sans-serif; }
+  .pair { display:flex; gap:32px; justify-content:center; flex-wrap:wrap; }
+  .cap { font:500 11px/1 Inter; letter-spacing:.08em; text-transform:uppercase; color:#777; margin:0 0 10px 4px; }
+
+  .mail { width:100%; max-width:520px; box-sizing:border-box; padding:44px 40px 32px;
+          --bg:#fbfbfa; --ink:#111; --sub:#6b6b6b; --line:#e6e6e3; --miss:#b42318; --cell:#f3f3f1;
+          background:var(--bg); color:var(--ink); }
+  .mail.dark { --bg:#0a0a0a; --ink:#ededed; --sub:#8a8a8a; --line:#1f1f1f; --miss:#f97066; --cell:#131313; }
+
+  .date { font-size:26px; font-weight:600; letter-spacing:-.02em; margin:0; }
+  .meta { color:var(--sub); font-size:14px; margin:6px 0 0; }
+  .note { font-size:15px; line-height:1.6; margin:28px 0 0; padding-left:14px; border-left:2px solid var(--ink); }
+
+  .sec { margin-top:36px; }
+  .label { font-size:11px; font-weight:500; letter-spacing:.09em; text-transform:uppercase; color:var(--sub);
+           padding-bottom:10px; border-bottom:1px solid var(--line); margin:0 0 4px; }
+
+  .row { display:flex; gap:16px; padding:11px 0; font-size:15px; line-height:1.45; border-bottom:1px solid var(--line); }
+  .row:last-child { border-bottom:0; }
+  .t { font-family:'JetBrains Mono',monospace; font-size:13px; color:var(--sub); width:48px; flex:none; padding-top:1px; }
+  .r { margin-left:auto; font-family:'JetBrains Mono',monospace; font-size:13px; color:var(--sub); white-space:nowrap; padding-top:1px; }
+  .sub { display:block; color:var(--sub); font-size:13px; margin-top:2px; }
+  .miss { color:var(--miss); }
+
+  .stats { display:grid; grid-template-columns:repeat(4,1fr); gap:1px; background:var(--line); border:1px solid var(--line); margin-top:14px; }
+  .stat { background:var(--bg); padding:14px 12px; }
+  .stat b { display:block; font:500 18px/1.1 'JetBrains Mono',monospace; letter-spacing:-.02em; }
+  .stat span { font-size:12px; color:var(--sub); }
+
+  .foot { margin-top:40px; font-size:12px; color:var(--sub); }
+  @media (max-width:480px){ .mail{padding:32px 22px} .stats{grid-template-columns:repeat(2,1fr)} }
+</style>
+</head>
+<body>
+<!-- Approved reference for the morning brief and weekly review emails (dark).
+     Sample data only. The production email is rebuilt with tables + inline styles. -->
+<div class="pair">
+<div class="mail dark" id="d"></div>
+</div>
+
+<template id="body">
+  <p class="date">Monday 12 October</p>
+  <p class="meta">Week 5 · Push day · 3 classes</p>
+
+  <p class="note">MATH2931 quiz is Thursday and Friday's block didn't happen. The 13:00 block today covers it, so it isn't optional.</p>
+
+  <div class="sec">
+    <p class="label">Owed</p>
+    <div class="row"><span class="miss">Gym debt · make up by Tue</span><span class="r miss">+10 min</span></div>
+    <div class="row"><span>Steps carried from Sunday</span><span class="r">+1,160</span></div>
+  </div>
+
+  <div class="sec">
+    <p class="label">Today</p>
+    <div class="row"><span class="t">07:15</span><span>Push<span class="sub">Leave by 07:20 · bench 62.5kg × 8 target</span></span></div>
+    <div class="row"><span class="t">10:00</span><span>MATH2901 lecture<span class="sub">Ainsworth G03</span></span></div>
+    <div class="row"><span class="t">13:00</span><span>Study · MATH2931<span class="sub">W5 problem set, Q1–6 · 90 min</span></span></div>
+    <div class="row"><span class="t">16:00</span><span>Study · COMP2521<span class="sub">Lab 4 · 60 min</span></span></div>
+    <div class="row"><span class="t">19:30</span><span>Project<span class="sub">Ship the login flow · 45 min</span></span></div>
+  </div>
+
+  <div class="sec">
+    <p class="label">Due soon</p>
+    <div class="row"><span>MATH2931 quiz 2</span><span class="r">Thu · 3d</span></div>
+    <div class="row"><span>COMP2521 assignment 1</span><span class="r">Mon 19 · 7d</span></div>
+  </div>
+
+  <div class="sec">
+    <p class="label">Yesterday</p>
+    <div class="stats">
+      <div class="stat"><b>Done</b><span>Legs</span></div>
+      <div class="stat"><b class="miss">8,840</b><span>Steps</span></div>
+      <div class="stat"><b>7.1h</b><span>Sleep</span></div>
+      <div class="stat"><b>78.4</b><span>kg · −0.3 wk</span></div>
+    </div>
+  </div>
+
+  <div class="sec">
+    <p class="label">One push</p>
+    <div class="row"><span>Message Priya Shah (Atlassian, ex-UNSW) about grad intake. Draft is in Gmail.</span></div>
+  </div>
+
+  <p class="foot">jarvis · 07:05</p>
+</template>
+<script>
+  const t=document.getElementById('body').innerHTML;
+  document.getElementById('d').innerHTML=t;
+</script>
+</body>
+</html>

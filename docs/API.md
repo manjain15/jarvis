@@ -23,6 +23,8 @@ The agent API reuses existing code:
 - `PATCH /mentor`, `PATCH /internships`, and `POST /internships` write
   `term_context.json` through `term_context.mutate_context`, the same locked
   atomic update the flags read on the next request.
+- `POST /events` and `GET /today` use the daily ledger (`ledger.py`,
+  `data/ledger/YYYY-MM-DD.json`). See `docs/REWORK.md`.
 
 ## Auth
 
@@ -38,7 +40,7 @@ log records actor `owner`. A field named `actor` in a JSON body is ignored.
 `JARVIS_API_TOKENS` is optional per-bot access:
 
 ```
-JARVIS_API_TOKENS=career:<token>,study:<token>,money:<token>
+JARVIS_API_TOKENS=career:<token>,study:<token>,money:<token>,coach:<token>,phone:<token>
 ```
 
 The name before the colon is the audit actor. Each name needs an entry in
@@ -47,9 +49,11 @@ can call):
 
 | Actor | Routes |
 | --- | --- |
-| `career` | `/health`, `/flags`, `/context`, `/mentor`, `/internships` |
-| `study` | `/health`, `/flags`, `/context` |
-| `money` | `/health`, `/flags`, `/spend`, `/finance` and `/finance/*` |
+| `career` | `/health`, `/flags`, `/context`, `/mentor`, `/internships`, `/today` |
+| `study` | `/health`, `/flags`, `/context`, `/today` |
+| `money` | `/health`, `/flags`, `/spend`, `/finance` and `/finance/*`, `/today` |
+| `coach` | `/health`, `/flags`, `/context`, `/today` |
+| `phone` | `/health`, `/events` |
 | `owner` (`JARVIS_API_TOKEN`) | every route |
 
 `/ask`, `/memory/search`, and `/brief` stay on the owner token unless you add
@@ -335,6 +339,35 @@ curl -sS -H "Authorization: Bearer $JARVIS_API_TOKEN" \
 ```
 
 `{"ok": true, "logged": "$14.50 Food & dining", "week_total": "$14.50", "entry": {...}}`
+
+### Phone events
+
+The iOS Shortcuts send evidence here with the `phone` token. The event is
+stored in today's ledger with the server's time (Sydney). Repeats are safe:
+wake and gym arrival keep the first time, steps keep the highest count, and
+sleep keeps the latest report. Unknown fields are 400.
+
+| Body | Sent by |
+| --- | --- |
+| `{"type": "wake"}` | Alarm stopped |
+| `{"type": "gym_arrive"}` | Arrive at the gym (location) |
+| `{"type": "steps", "count": 4210}` | 10:00, 13:00, 16:00, 19:00, 21:00 |
+| `{"type": "sleep", "hours": 7.1}` | Morning, optional |
+
+```
+curl -sS -H "Authorization: Bearer $PHONE_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"type": "steps", "count": 4210}' \
+  https://<your-host>/events
+```
+
+`{"ok": true, "date": "2026-10-12", "type": "steps"}`
+
+### Today
+
+`GET /today` returns today's ledger, creating it if it does not exist:
+the split, wake time, sleep, each commitment (gym, steps) with its status,
+the carried debt, and `event_count`. The raw event log is not returned.
 
 ### Correct the mentor record
 
