@@ -56,3 +56,21 @@ def test_session_on_the_day_after_is_not_moved_back():
     monday = _w(datetime.datetime(2026, 10, 12, 8, 0))   # Monday's own Pull
     got = hevy.assign_sessions([monday], SUN, SUN, split_fn=split)
     assert SUN not in got
+
+
+def test_review_window_is_the_last_complete_training_week(monkeypatch):
+    import weekly_review
+    monkeypatch.setattr(term_context, "get_workout_schedule", lambda: SPLIT)
+    sunday_run = datetime.date(2026, 10, 18)
+    assert weekly_review.review_window(sunday_run) == (SUN, datetime.date(2026, 10, 17))
+    # Any day during the week reviews the same, last complete week.
+    assert weekly_review.review_window(datetime.date(2026, 10, 14)) == (SUN - datetime.timedelta(days=7),
+                                                                         SUN - datetime.timedelta(days=1))
+
+
+def test_term_week_of_the_reviewed_week():
+    import weekly_review
+    ctx = {"term": {"start_date": "2026-09-14"}}
+    assert weekly_review._term_week(ctx, datetime.date(2026, 10, 17)) == 5
+    assert weekly_review._term_week(ctx, datetime.date(2026, 9, 1)) == 0
+    assert weekly_review._term_week({}, datetime.date(2026, 10, 17)) is None
