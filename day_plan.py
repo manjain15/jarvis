@@ -413,7 +413,10 @@ def write_tasks(placed, context, carry):
     lines = [f"{i + 1}. {c} {'lecture' if k == 'lecture' else 'study'} "
              f"{s:%H:%M}–{e:%H:%M} ({int((e - s).total_seconds() // 60)} min)"
              for i, (c, k, s, e) in enumerate(placed)]
-    prompt = f"""Write one concrete task for each study block below. Manav is a UNSW student.
+    from voice import VOICE_RULES
+    prompt = f"""{VOICE_RULES}
+
+Write one concrete task for each study block below.
 
 Rules:
 - Each task fits its block's minutes. Specific and checkable: "Assignment 2 Q1-3", "W5 lecture 2 + notes", not "study".
