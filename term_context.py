@@ -229,11 +229,13 @@ def update_workout_schedule(schedule: dict):
 #   routine:  {"Monday": [{"start": "09:30", "end": "17:30", "label": "Work"}], ...}
 #   daily_cap_hours: {"Monday": 1.5, ...}
 #   ignore_busy: ["Lecture"]   title words that don't block study time
+#   weekly_checks: [{"id", "label", "day", "ask", "followup", "requires_class"}]
 
 DEFAULT_STUDY_PLAN = {
     "targets": {},
     "routine": {},
     "ignore_busy": [],
+    "weekly_checks": [],
     "daily_cap_hours": {
         "Monday": 4, "Tuesday": 4, "Wednesday": 4, "Thursday": 4,
         "Friday": 4, "Saturday": 5, "Sunday": 5,

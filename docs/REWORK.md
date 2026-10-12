@@ -84,6 +84,17 @@ At each block's end, Telegram asks: `MATH2931 · Assignment 2 Q1-3. Done? done /
 
 `python day_plan.py --dry-run` prints today's plan and writes nothing.
 
+**Week topics** come from the public UNSW course outline API (`course_outlines.py`).
+- Refreshed every Sunday, and on `/outlines`.
+- Saved to `data/outlines/`.
+- Merged under the hand-entered `courses/*.json`: manual topics win.
+
+**Weekly checks** (`study_plan.weekly_checks`) are small yes/no tasks with one
+follow-up. For SCIF1000:
+- Pre-class activities: Thursday 11:00, follow-up 12:45.
+- Post-class activities: Thursday 19:30, follow-up 20:45.
+- Only in weeks the timetable has the SCIF1000 class.
+
 ## 5. Gym — wake sequence
 
 Wake signal: an iOS Shortcut runs on **alarm stopped** and sends `POST /events {"type":"wake"}`.

@@ -133,6 +133,9 @@ Never write outside `/Users/manavjain/jarvis/`.
   `day_plan.py` builds the day at 05:30 (one Claude call for block tasks):
   study/lecture blocks from `term_context.json → study_plan`, written to Google
   Calendar tagged `jarvis=study`, with a done/partial/no check at each block's end.
+  Weekly yes/no checks (`study_plan.weekly_checks`, e.g. SCIF1000 pre/post-class).
+  Week topics: `course_outlines.py` pulls the public UNSW outline API on Sundays
+  (and `/outlines`) into `data/outlines/`; `courses/*.json` hand entries win.
   Money stakes are deferred (trial).
 
 ## Git

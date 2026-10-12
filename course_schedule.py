@@ -1,14 +1,16 @@
 """
 Jarvis — Course Schedule (weekly topics from course outlines)
 =============================================================
-Course outlines and weekly schedules live behind UNSW SSO (Moodle / course
-sites), so they can't be auto-fetched like the timetable. They are also fixed
-for the whole term, so they're entered once per term as JSON in courses/.
+Weekly schedules come from two places:
+  data/outlines/<code>.json  fetched from the public UNSW course outline API
+                             by course_outlines.py (weekly, automatic)
+  courses/<code>.json        filled in by hand (same shape as comp2511.json)
 
-This module loads those per-course schedules and surfaces "this week's topics"
-into the morning brief, using the current term week from term_context. Drop a
-new courses/<code>.json (same shape as comp2511.json) and it's picked up
-automatically — no code change needed.
+They are merged per week: hand-entered topics replace the outline's for that
+week, and hand-entered assessments are added to the outline's. A course with
+only one of the two still works. This module surfaces "this week's topics"
+into the morning brief and the day plan, using the current term week from
+term_context.
 
 Optional + defensive: every accessor returns empty on any error, so a missing
 or malformed file can never break the brief.
@@ -17,8 +19,9 @@ or malformed file can never break the brief.
 import json
 from pathlib import Path
 
-SCRIPT_DIR  = Path(__file__).parent
-COURSES_DIR = SCRIPT_DIR / "courses"
+SCRIPT_DIR   = Path(__file__).parent
+COURSES_DIR  = SCRIPT_DIR / "courses"
+OUTLINES_DIR = SCRIPT_DIR / "data" / "outlines"
 
 
 def _current_week():
@@ -30,17 +33,49 @@ def _current_week():
         return None
 
 
-def load_courses():
-    """Load every courses/*.json. Returns a list of course dicts ([] on error)."""
-    if not COURSES_DIR.exists():
-        return []
-    courses = []
-    for path in sorted(COURSES_DIR.glob("*.json")):
+def _load_dir(directory):
+    """{CODE: course dict} for every readable <code>.json in directory."""
+    found = {}
+    if not directory.exists():
+        return found
+    for path in sorted(directory.glob("*.json")):
+        if path.name.startswith("_"):
+            continue
         try:
-            courses.append(json.loads(path.read_text()))
+            course = json.loads(path.read_text())
+            found[course.get("code", path.stem).upper()] = course
         except Exception:
             continue
-    return courses
+    return found
+
+
+def _merge(outline, manual):
+    """One course: the outline's weeks, with hand-entered weeks layered on top."""
+    if not outline:
+        return manual
+    if not manual:
+        return outline
+    merged = {**outline, **{k: v for k, v in manual.items() if k != "schedule" and v}}
+    weeks = {w["week"]: dict(w) for w in outline.get("schedule", [])}
+    for w in manual.get("schedule", []):
+        base = weeks.setdefault(w["week"], {"week": w["week"], "topics": [], "assessments": []})
+        if w.get("topics"):
+            base["topics"] = w["topics"]
+        extra = [a for a in w.get("assessments", []) if a not in base.get("assessments", [])]
+        base["assessments"] = base.get("assessments", []) + extra
+    merged["schedule"] = [weeks[k] for k in sorted(weeks)]
+    return merged
+
+
+def load_courses():
+    """
+    Every course with a schedule, outline and hand-entered data merged.
+    Returns a list of course dicts ([] on error).
+    """
+    outlines = _load_dir(OUTLINES_DIR)
+    manual = _load_dir(COURSES_DIR)
+    return [_merge(outlines.get(code), manual.get(code))
+            for code in sorted(set(outlines) | set(manual))]
 
 
 def get_week_topics(week, course=None):
@@ -58,6 +93,7 @@ def get_week_topics(week, course=None):
                     "code":        c.get("code", "?"),
                     "name":        c.get("name", ""),
                     "topics":      entry.get("topics", []),
+                    "activities":  entry.get("activities", []),
                     "assessments": entry.get("assessments", []),
                 })
     return out

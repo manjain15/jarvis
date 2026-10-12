@@ -26,6 +26,9 @@ Claude call writes the task for every block (fallback: plain text from the
 course schedule). Calendar events are tagged jarvis=study; a re-plan only
 deletes those.
 
+WEEKLY CHECKS: study_plan.weekly_checks adds small recurring yes/no tasks
+(SCIF1000 pre/post-class activities) with a follow-up if the answer is no.
+
 CHECKS: at a block's end, "MATH2931 · Assignment 2 Q1–3. Done? done / partial
 / no". One question at a time. No reply in 60 min: no_reply. Anything not
 done rolls into tomorrow's tasks for that course.
@@ -140,7 +143,9 @@ def course_context(date, courses):
             try:
                 for c in course_schedule.get_week_topics(week, code):
                     if c.get("topics"):
-                        lines.append(f"Week {week} topics: {', '.join(c['topics'])}")
+                        lines.append(f"Week {week} topics: {'; '.join(c['topics'])}")
+                    if c.get("activities"):
+                        lines.append(f"Week {week} classes and tasks: {'; '.join(c['activities'])}")
             except Exception:
                 pass
         for a in upcoming:
@@ -447,12 +452,13 @@ def _title(course, kind):
     return f"Lecture · {course}" if kind == "lecture" else f"Study · {course}"
 
 
-def build_plan(now=None, dry_run=False, busy_fn=None, tasks_fn=None, calendar=None):
+def build_plan(now=None, dry_run=False, busy_fn=None, tasks_fn=None, calendar=None, class_fn=None):
     """
     Plan today. Returns the study items. dry_run computes and returns them
     without touching the calendar or the ledger.
     calendar: object with create(title, start, end, description, date_str) -> id,
     delete_all(date_str). Defaults to Google Calendar.
+    class_fn(date, code) says whether the timetable has that class (weekly checks).
     """
     import enforcer
     now = now or ledger.now_local()
@@ -498,8 +504,9 @@ def build_plan(now=None, dry_run=False, busy_fn=None, tasks_fn=None, calendar=No
             "minutes": int((end - start).total_seconds() // 60),
             "status": "pending", "event_id": None, "asked_at": None,
         })
+    checks = weekly_check_items(plan, date, class_fn=class_fn)
     if dry_run:
-        return {"gym_slot": new_slot, "allocation": alloc, "items": items}
+        return {"gym_slot": new_slot, "allocation": alloc, "items": items, "checks": checks}
 
     date_str = date.isoformat()
     calendar.delete_all(date_str)
@@ -509,7 +516,8 @@ def build_plan(now=None, dry_run=False, busy_fn=None, tasks_fn=None, calendar=No
             datetime.datetime.fromisoformat(item["end"]), item["task"], date_str)
 
     def _save(d):
-        d["items"] = [i for i in d["items"] if i.get("kind") != "study"] + items
+        d["items"] = [i for i in d["items"] if i.get("kind") not in ("study", "check")] \
+            + items + checks
         g = ledger.find_item(d, "gym")
         if g is not None and new_slot and g.get("status") == "pending" \
                 and not (g.get("seq") or {}).get("started"):
@@ -559,32 +567,89 @@ def tick(now=None, build=None):
     return []
 
 
-# ── Block checks ─────────────────────────────────────────────────────────────
+# ── Weekly checks ────────────────────────────────────────────────────────────
+# Small recurring tasks that don't need a study block, e.g. SCIF1000 pre- and
+# post-class activities. Config: study_plan.weekly_checks, a list of
+#   {"id", "label", "day": "Thursday", "ask": "11:00", "followup": "12:45",
+#    "requires_class": "SCIF1000"}
+# requires_class skips the check on days the timetable has no such class
+# (flexibility week). If the timetable can't be read, the check still runs.
+
+def has_class(date, code):
+    """True when the timetable has a class for code on date (True if unreadable)."""
+    try:
+        import uni_timetable
+        return any(code.upper() in (c.get("title") or "").upper()
+                   for c in uni_timetable.get_events_for(date))
+    except Exception:
+        return True
+
+
+def weekly_check_items(plan, date, class_fn=None):
+    """Ledger items for the weekly checks that fall on date."""
+    class_fn = class_fn or has_class
+    items = []
+    for cfg in plan.get("weekly_checks", []):
+        if cfg.get("day") != WEEKDAYS[date.weekday()]:
+            continue
+        if cfg.get("requires_class") and not class_fn(date, cfg["requires_class"]):
+            continue
+        items.append({
+            "id": cfg["id"], "kind": "check", "label": cfg["label"],
+            "ask_at": _at(date, _hm(cfg["ask"])).isoformat(timespec="minutes"),
+            "followup_at": _at(date, _hm(cfg["followup"])).isoformat(timespec="minutes")
+            if cfg.get("followup") else None,
+            "status": "pending", "asked_at": None, "followup_sent": False,
+        })
+    return items
+
+
+# ── Block and check questions ────────────────────────────────────────────────
 
 def _question(item):
+    if item["kind"] == "check":
+        lead = "Still open: " if item.get("followup_sent") else ""
+        return f"{lead}{item['label']}. Done? done / no"
     verb = "Watched" if item["type"] == "lecture" else "Done"
     return f"{item['course']} · {item['task']}. {verb}? done / partial / no"
 
 
+def _due_at(item):
+    """When an item's next question is due, or None when it has nothing to ask."""
+    if item["kind"] == "study":
+        if item["status"] == "pending" and not item.get("asked_at"):
+            return datetime.datetime.fromisoformat(item["end"])
+        return None
+    if item["status"] == "pending" and not item.get("asked_at"):
+        return datetime.datetime.fromisoformat(item["ask_at"])
+    if item["status"] in ("no", "no_reply") and item.get("followup_at") and not item.get("followup_sent"):
+        return datetime.datetime.fromisoformat(item["followup_at"])
+    return None
+
+
 def check_tick(now=None):
-    """Ask about the earliest finished, unasked block. One question at a time."""
+    """Ask the next due block or weekly-check question. One question at a time."""
     now = now or ledger.now_local()
 
     def _check(day):
-        blocks = [i for i in day.get("items", []) if i.get("kind") == "study"]
-        for item in blocks:
+        askable = [i for i in day.get("items", []) if i.get("kind") in ("study", "check")]
+        for item in askable:
             if item["status"] == "pending" and item.get("asked_at"):
                 asked = datetime.datetime.fromisoformat(item["asked_at"])
                 if now - asked < datetime.timedelta(minutes=CHECK_WAIT_MIN):
                     return None  # Waiting on an answer.
                 item["status"] = "no_reply"
-        for item in sorted(blocks, key=lambda i: i["end"]):
-            end = datetime.datetime.fromisoformat(item["end"])
-            if item["status"] != "pending" or item.get("asked_at") or now < end:
+        due = [(t, i) for i in askable for t in [_due_at(i)] if t is not None and t <= now]
+        for t, item in sorted(due, key=lambda pair: pair[0]):
+            if now - t > datetime.timedelta(hours=CHECK_STALE_HRS):
+                # The daemon was down; don't ask hours late.
+                if item["status"] == "pending":
+                    item["status"] = "no_reply"
+                item["followup_sent"] = True
                 continue
-            if now - end > datetime.timedelta(hours=CHECK_STALE_HRS):
-                item["status"] = "no_reply"  # Daemon was down; don't ask hours late.
-                continue
+            if item["kind"] == "check" and item["status"] in ("no", "no_reply"):
+                item["followup_sent"] = True
+                item["status"] = "pending"
             item["asked_at"] = now.isoformat(timespec="seconds")
             return _question(item)
         return None
@@ -594,7 +659,7 @@ def check_tick(now=None):
 
 
 def handle_reply(text, now=None):
-    """Answer the outstanding block question. Returns the reply, or None if there isn't one."""
+    """Answer the outstanding question. Returns the reply, or None if there isn't one."""
     now = now or ledger.now_local()
     word = text.strip().lower().rstrip(".!")
     if word in DONE_WORDS:
@@ -608,14 +673,23 @@ def handle_reply(text, now=None):
 
     def _answer(day):
         for item in day.get("items", []):
-            if item.get("kind") == "study" and item["status"] == "pending" and item.get("asked_at"):
-                item["status"] = status
-                item["answered_at"] = now.isoformat(timespec="seconds")
-                if status == "done":
-                    return "Logged."
-                if status == "partial":
-                    return "Partial. The rest rolls to tomorrow."
-                return "Rolls to tomorrow."
+            if item.get("kind") not in ("study", "check") or item["status"] != "pending" \
+                    or not item.get("asked_at"):
+                continue
+            answered = status
+            if item["kind"] == "check" and status == "partial":
+                answered = "no"
+            item["status"] = answered
+            item["answered_at"] = now.isoformat(timespec="seconds")
+            if answered == "done":
+                return "Logged."
+            if item["kind"] == "check":
+                if item.get("followup_at") and not item.get("followup_sent"):
+                    return f"Asking again at {item['followup_at'][11:16]}."
+                return "Logged as not done."
+            if answered == "partial":
+                return "Partial. The rest rolls to tomorrow."
+            return "Rolls to tomorrow."
         return None
 
     return ledger.update_day(now.date(), _answer)
