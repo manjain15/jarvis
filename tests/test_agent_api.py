@@ -626,7 +626,8 @@ class _Clock:
         return self.now
 
 
-def test_per_bot_scopes(monkeypatch):
+def test_per_bot_scopes(monkeypatch, tmp_path):
+    monkeypatch.setattr(agent_api, "BRIEF_FILE", tmp_path / "latest_brief.json")  # no brief saved
     monkeypatch.setattr(agent_api, "get_flags_payload", lambda: {"flags": [], "academic_alerts": [], "unavailable": []})
     monkeypatch.setattr(agent_api, "get_context_payload", lambda days_ahead: {"days_ahead": days_ahead})
     monkeypatch.setattr(agent_api, "get_finance_payload", lambda *args, **kwargs: {"unavailable": []})
