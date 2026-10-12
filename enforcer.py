@@ -35,6 +35,8 @@ DEBT (settled when the day closes, 23:00):
             workout (a rest-day session, or minutes beyond that day's target).
   make-up not done by its due date: +20 min on the next gym session, which
             stays until a session hits the longer target.
+  steps     the shortfall against the day's target becomes tomorrow's step
+            debt (cap +3,000). No readings that day: no debt.
 
 No Anthropic calls. Hevy is called at most every 30 min, and only after
 slot + 2h. Calendar and Google Health are read only when a skip needs it.
@@ -308,8 +310,9 @@ def _apply_workout(day, gym, minutes, now):
 
 def _settle(day, minutes, now):
     """
-    Close a ledger: grade the gym item, settle make-ups and gym debt.
-    minutes is the day's Hevy total. Returns messages to send.
+    Close a ledger: grade the gym item, settle make-ups, gym debt and step
+    debt. minutes is the day's Hevy total (0 when Hevy wasn't needed).
+    Returns messages to send.
     """
     out = []
     date = datetime.date.fromisoformat(day["date"])
@@ -365,9 +368,36 @@ def _settle(day, minutes, now):
             out.append(f"Make-up not done. +{EXPIRED_PENALTY} min on the next session "
                        "until it's hit.")
 
+    out += _settle_steps(day, debt)
     day["closed"] = True
     _log(day, "closed", now, minutes=minutes)
     return out
+
+
+def _settle_steps(day, debt):
+    """
+    Tomorrow's step debt is today's shortfall (capped). A day with no
+    readings is unknown, not short, and carries nothing.
+    """
+    steps = ledger.find_item(day, "steps")
+    has_reading = any(e.get("type") == "steps" and (e.get("value") or 0) > 0
+                      for e in day.get("events", []))
+    if steps is None or not has_reading:
+        debt["steps"] = 0
+        return []
+    short = max(0, steps["target"] - steps["count"])
+    debt["steps"] = min(short, ledger.STEP_DEBT_CAP)
+    if not short:
+        return []
+    return [f"Steps {steps['count']:,} / {steps['target']:,}. +{debt['steps']:,} tomorrow."]
+
+
+def _needs_hevy(day):
+    """True when closing day depends on Hevy: an open gym item or an owed make-up."""
+    gym = ledger.find_item(day, "gym")
+    if gym is not None and gym.get("status") in ("pending", "partial"):
+        return True
+    return bool((day.get("debt") or {}).get("makeup"))
 
 
 def _close(date, now, fetch):
@@ -375,7 +405,7 @@ def _close(date, now, fetch):
     stored = ledger.load_day(date)
     if stored is None or stored.get("closed"):
         return []
-    minutes = fetch(date)
+    minutes = fetch(date) if _needs_hevy(stored) else 0
     if minutes is None:
         return []  # Hevy unreachable. The next tick retries.
     out = ledger.update_day(date, lambda day: [] if day.get("closed") else _settle(day, minutes, now))

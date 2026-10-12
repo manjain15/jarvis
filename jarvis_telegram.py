@@ -75,6 +75,13 @@ except Exception as _e:
     print(f"⚠️  enforcer unavailable: {_e}")
     ENFORCER_AVAILABLE = False
 
+try:
+    import pace
+    PACE_AVAILABLE = True
+except Exception as _e:
+    print(f"⚠️  pace unavailable: {_e}")
+    PACE_AVAILABLE = False
+
 SCRIPT_DIR  = Path(__file__).parent
 DATA_DIR    = SCRIPT_DIR / "data"
 MEMORY_DIR  = SCRIPT_DIR / "memory"
@@ -1073,10 +1080,13 @@ def _enforcer_call(fn, *args):
 
 
 def run_enforcer_tick():
-    """Advance the gym sequence and send whatever it returns."""
-    if not ENFORCER_AVAILABLE:
-        return
-    for text in _enforcer_call(enforcer.tick) or []:
+    """Advance the gym sequence and step pace, and send whatever they return."""
+    messages = []
+    if ENFORCER_AVAILABLE:
+        messages += _enforcer_call(enforcer.tick) or []
+    if PACE_AVAILABLE:
+        messages += _enforcer_call(pace.tick) or []
+    for text in messages:
         send_message(text)
         print(f"🏋️  → {text[:80]}")
 
