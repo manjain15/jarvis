@@ -46,7 +46,7 @@ from pathlib import Path
 # Units the watchdog checks. Keep in sync with deploy/systemd/.
 ALWAYS_ON     = ["jarvis-telegram", "jarvis-agent-api"]  # .service must be active
 TIMER_UNITS   = [
-    "jarvis-morningbrief", "jarvis-alerts", "jarvis-gmail",
+    "jarvis-morningbrief", "jarvis-gmail",
     "jarvis-memory", "jarvis-jobsearch",
 ]
 DISK_WARN_PCT = 90  # alert if the root filesystem is at/over this % used

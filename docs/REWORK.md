@@ -21,7 +21,7 @@ self-report. A miss costs something.
 | **Telegram** (`jarvis_telegram.py`) | Wake sequence, gym escalation, step pace, study-block checks, debt notices. Plus the existing `/approve`-style commands | Free chat, summaries, advice |
 | **Email** | Morning brief (07:05), Sunday weekly review. Read, not pinged | — |
 
-Retired: ntfy alerts (`alerts.py`, timer disabled), the Telegram 21:00
+Retired: ntfy alerts (`alerts.py` and its timer, removed in phase 7), the Telegram 21:00
 check-in, and Telegram free-form chat (`chat_with_claude` stays for `POST /ask`).
 
 Grok bots cannot receive pushes. They pull from the agent API, either when
@@ -282,7 +282,8 @@ Each phase ships and gets tested on its own.
 4. **05:30 plan + study blocks in Calendar + block checks.**
 5. **Email redesign + `voice.py`.** Touches `morning_brief.py` and `weekly_review.py` (diff + `--test` shown).
 6. **Areas + Grok check-in routes + `docs/grok_bots.md`.** Retire the Telegram check-in.
-7. **Retire ntfy.** Disable the `jarvis-alerts` timer (needs explicit OK).
+7. **Retire ntfy alerts.** Done: `alerts.py` and the `jarvis-alerts` timer are
+   removed. `gmail_monitor.py` still pushes action emails to ntfy.
 
 ## 16. Files touched
 
