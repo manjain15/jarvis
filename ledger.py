@@ -80,10 +80,32 @@ def _split_label(date):
 def _carried_debt(previous):
     """Debt to carry from the previous day's ledger (zero when there is none)."""
     debt = dict(EMPTY_DEBT)
+    debt["makeup"] = None
     if previous:
-        for key in debt:
-            debt[key] = max(0, int(previous.get("debt", {}).get(key, 0) or 0))
+        stored = previous.get("debt", {})
+        for key in EMPTY_DEBT:
+            debt[key] = max(0, int(stored.get(key, 0) or 0))
+        debt["makeup"] = stored.get("makeup")
     return debt
+
+
+def apply_carried_debt(day, previous):
+    """
+    Reset day's debt from previous and re-derive the targets that depend on
+    it (gym minutes, step target). Used when a day is built, and when the
+    previous day is closed after this day's file already exists.
+    """
+    debt = _carried_debt(previous)
+    day["debt"] = debt
+    gym = find_item(day, "gym")
+    if gym is not None:
+        gym["minutes"] = gym.get("base_minutes", DEFAULT_GYM_MINUTES) + debt["gym_minutes"]
+    steps = find_item(day, "steps")
+    if steps is not None:
+        steps["target"] = STEP_TARGET + min(debt["steps"], STEP_DEBT_CAP)
+        if steps["status"] == "done" and steps["count"] < steps["target"]:
+            steps["status"] = "pending"
+    return day
 
 
 def build_day(date, previous=None):
@@ -92,7 +114,6 @@ def build_day(date, previous=None):
     only to carry debt forward. The step target includes step debt, capped
     at STEP_DEBT_CAP.
     """
-    debt = _carried_debt(previous)
     items = []
 
     split = _split_label(date)
@@ -102,7 +123,8 @@ def build_day(date, previous=None):
             "kind": "gym",
             "title": split,
             "slot": DEFAULT_GYM_SLOT,
-            "minutes": DEFAULT_GYM_MINUTES + debt["gym_minutes"],
+            "base_minutes": DEFAULT_GYM_MINUTES,
+            "minutes": DEFAULT_GYM_MINUTES,
             "evidence": "geofence+hevy",
             "status": "pending",
             "excuse": None,
@@ -113,21 +135,23 @@ def build_day(date, previous=None):
         "id": "steps",
         "kind": "steps",
         "title": "Steps",
-        "target": STEP_TARGET + min(debt["steps"], STEP_DEBT_CAP),
+        "target": STEP_TARGET,
         "count": 0,
         "evidence": "shortcut",
         "status": "pending",
     })
 
-    return {
+    day = {
         "date": date.isoformat(),
         "split": split,
         "woke_at": None,
         "sleep_hours": None,
         "items": items,
-        "debt": debt,
+        "debt": None,
         "events": [],
+        "closed": False,
     }
+    return apply_carried_debt(day, previous)
 
 
 def _get_or_create_unlocked(date):
@@ -145,6 +169,19 @@ def get_or_create_day(date=None):
     date = date or now_local().date()
     with file_lock(ledger_path(date)):
         return _get_or_create_unlocked(date)
+
+
+def update_day(date, mutate):
+    """
+    Locked read-modify-write of date's ledger (created if missing).
+    mutate(day) edits the dict in place and may return a value, which
+    update_day returns. The file is saved after mutate runs.
+    """
+    with file_lock(ledger_path(date)):
+        day = _get_or_create_unlocked(date)
+        result = mutate(day)
+        atomic_write_json(ledger_path(date), day)
+    return result
 
 
 def find_item(day, item_id):
@@ -226,16 +263,16 @@ def record_event(body, now=None):
     event_type, value = validate_event(body)
     now = now or now_local()
     ts = now.isoformat(timespec="seconds")
-    date = now.date()
-    with file_lock(ledger_path(date)):
-        day = _get_or_create_unlocked(date)
+
+    def _mutate(day):
         event = {"ts": ts, "type": event_type}
         if value is not None:
             event["value"] = value
         day["events"].append(event)
         _apply_event(day, event_type, value, ts)
-        atomic_write_json(ledger_path(date), day)
-    return day
+        return day
+
+    return update_day(now.date(), _mutate)
 
 
 def today_payload(now=None):

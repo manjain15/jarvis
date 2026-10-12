@@ -114,9 +114,21 @@ The 21:00 shortfall becomes tomorrow's debt (cap +3,000).
 
 ## 7. Debt
 
-- A missed gym session is made up within 48h, plus 10 min. It shows at the top of every Telegram message and in the brief's Owed section until cleared.
-- Gym debt not cleared within 48h rolls into the next session's target (+10 min more). It never goes away silently.
-- A step shortfall carries to the next day (cap +3,000).
+Settled when the day closes (23:00, or on the next tick if the daemon was down).
+
+| Outcome | Rule | Debt |
+|---|---|---|
+| done | Hevy minutes ≥ target − 15 | clears `gym_minutes` |
+| partial | ≥ 25 min | none |
+| excused | `skip sick` | none, shown in the weekly review |
+| unenforced | the sequence never ran that day (before go-live, daemon down all morning) | none |
+| missed | anything else | a **make-up**: the session + 10 min within 2 days |
+
+- **Make-up**: an extra workout. Either a rest-day session, or minutes beyond that day's target. It clears when the extra minutes are ≥ make-up − 15.
+- **Make-up not done by its due date**: +20 min on every gym session until one hits the longer target.
+- **A second miss while a make-up is owed**: +10 min on the next session.
+- **Steps**: a shortfall carries to the next day (cap +3,000). Built in phase 3.
+- Messages are sent only inside their window. After a restart, overdue reminders are dropped instead of sent all at once.
 
 **Money stakes are deferred.** The first 4 weeks are a trial with debt only.
 At the end of the trial, the weekly review shows, per week:
