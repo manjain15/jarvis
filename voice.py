@@ -36,3 +36,11 @@ def strip_emoji(text):
     """Remove emoji from model output and tidy the spacing they leave behind."""
     cleaned = _EMOJI.sub("", text or "")
     return re.sub(r"[ \t]{2,}", " ", cleaned).strip()
+
+
+def drop_emoji(text):
+    """
+    Remove emoji (and the one space after each) but keep the layout:
+    indentation, line breaks and bullets stay. Used on every Telegram send.
+    """
+    return re.sub(_EMOJI.pattern + r" ?", "", text or "")

@@ -67,6 +67,7 @@ import anthropic
 
 import config
 import evening_checkin
+from voice import drop_emoji
 
 try:
     import enforcer
@@ -136,6 +137,7 @@ def send_message(text, chat_id=None, parse_mode=None):
         chat_id = config.TELEGRAM_CHAT_ID
     if not chat_id:
         return False
+    text = drop_emoji(text)
     # Telegram caps messages at 4096 chars — chunk if needed
     chunks = [text[i:i + 4000] for i in range(0, len(text), 4000)] or [""]
     for chunk in chunks:
@@ -456,7 +458,7 @@ def _handle_tool_call(block):
                 return "⏭ Skipped a profile update (transient or duplicate)."
             pending = get_pending_proposals()
             pid = max((p["id"] for p in pending), default="?")
-            return f"📝 Queued profile proposal [{pid}] — /approve profile {pid}"
+            return f"Queued profile proposal [{pid}] — /approve profile {pid}"
 
         if block.name == "propose_term_update":
             from term_updates import add_proposal, get_pending_proposals
@@ -468,7 +470,7 @@ def _handle_tool_call(block):
                 return "⏭ Skipped a term update (invalid action or duplicate)."
             pending = get_pending_proposals()
             pid = max((p["id"] for p in pending), default="?")
-            return f"📝 Queued term proposal [{pid}] — /approve term {pid}"
+            return f"Queued term proposal [{pid}] — /approve term {pid}"
 
         if block.name == "start_remote_work":
             from remote_work import start_session
@@ -477,8 +479,8 @@ def _handle_tool_call(block):
                 open_pr=block.input.get("open_pr", False),
             )
             if error:
-                return f"⚠️ {error}"
-            return f"🛠️ Started remote-work session [{session_id}] — I'll ping you when it's done."
+                return f"Failed: {error}"
+            return f"Started remote-work session [{session_id}] — I'll ping you when it's done."
 
         if block.name == "check_remote_work":
             from remote_work import check_session
@@ -488,12 +490,12 @@ def _handle_tool_call(block):
             from remote_work import register_project
             info, error = register_project(block.input["name"], block.input.get("repo_query"))
             if error:
-                return f"⚠️ {error}"
-            return f"📎 Registered '{block.input['name']}' → {info['full_name']}"
+                return f"Failed: {error}"
+            return f"Registered '{block.input['name']}' → {info['full_name']}"
 
-        return f"⚠️ Unknown tool: {block.name}"
+        return f"Unknown tool: {block.name}"
     except Exception as e:
-        return f"⚠️ Tool call failed: {e}"
+        return f"Tool call failed: {e}"
 
 
 def chat_with_claude(user_message, static_context, recent_turns, tools=None):
@@ -541,7 +543,7 @@ def chat_with_claude(user_message, static_context, recent_turns, tools=None):
     reply = "\n".join(text_parts).strip()
     if tool_replies:
         reply = (reply + "\n\n" if reply else "") + "\n".join(tool_replies)
-    return reply or "✅ Done."
+    return reply or "Done."
 
 
 # ── Slash command router ────────────────────────────────────────────────────
@@ -576,9 +578,9 @@ def cmd_brief(_args):
         try:
             from morning_brief import run_brief
             run_brief()
-            send_message("✅ Morning brief sent to your inbox.")
+            send_message("Morning brief sent to your inbox.")
         except Exception as e:
-            send_message(f"⚠️ Brief failed: {e}")
+            send_message(f"Brief failed: {e}")
     threading.Thread(target=_run, daemon=True).start()
     return "⏳ Running morning brief — I'll ping you when it's sent."
 
@@ -590,10 +592,10 @@ def cmd_deadlines(_args):
         ctx = term_context.load_context()
         items = term_context.get_upcoming_assessments(ctx, days_ahead=120)
     except Exception as e:
-        return f"⚠️ Could not load deadlines: {e}"
+        return f"Could not load deadlines: {e}"
     if not items:
-        return "✅ No assessments due in the next 120 days."
-    lines = ["📅 Upcoming assessments:"]
+        return "No assessments due in the next 120 days."
+    lines = ["Upcoming assessments:"]
     for a in items:
         try:
             due = datetime.datetime.fromisoformat(a["due"]).strftime("%-d %b")
@@ -609,10 +611,10 @@ def cmd_flags(_args):
         from term_context import get_flags
         flags = get_flags()
     except Exception as e:
-        return f"⚠️ Could not load term flags: {e}"
+        return f"Could not load term flags: {e}"
     if not flags:
-        return "✅ No urgent flags today."
-    return "🚩 Today's flags:\n" + "\n".join(f"• {f}" for f in flags)
+        return "No urgent flags today."
+    return "Today's flags:\n" + "\n".join(f"• {f}" for f in flags)
 
 
 def cmd_proposals(_args):
@@ -631,7 +633,7 @@ def cmd_proposals(_args):
             out.append(t)
     except Exception:
         pass
-    return "\n\n".join(out) if out else "✅ No pending proposals."
+    return "\n\n".join(out) if out else "No pending proposals."
 
 
 def _record_trust(kind, proposal, approved):
@@ -649,7 +651,7 @@ def cmd_trust(_args):
         from proposal_trust import format_trust_summary
         return format_trust_summary()
     except Exception as e:
-        return f"⚠️ {e}"
+        return f"Failed: {e}"
 
 
 def cmd_approve(args):
@@ -666,18 +668,18 @@ def cmd_approve(args):
         proposals = mod.load_proposals()
         match = next((p for p in proposals if str(p["id"]) == str(pid) and p["status"] == "pending"), None)
         if not match:
-            return f"⚠️ No pending {kind} proposal with id {pid}."
+            return f"No pending {kind} proposal with id {pid}."
         try:
             if not mod.apply_update(match):
-                return f"❌ Failed to apply {kind} proposal [{pid}] — left pending."
+                return f"Failed to apply {kind} proposal [{pid}] — left pending."
         except Exception as e:
-            return f"⚠️ {e}"
+            return f"Failed: {e}"
         for p in proposals:
             if str(p["id"]) == str(pid):
                 p["status"], p["resolved_date"] = "approved", resolved
         mod.save_proposals(proposals)
     _record_trust(kind, match, approved=True)
-    return f"✅ Applied {kind} proposal [{pid}]."
+    return f"Applied {kind} proposal [{pid}]."
 
 
 def cmd_reject(args):
@@ -692,7 +694,7 @@ def cmd_reject(args):
         proposals = mod.load_proposals()
         match = next((p for p in proposals if str(p["id"]) == str(pid) and p["status"] == "pending"), None)
         if not match:
-            return f"⚠️ No pending {kind} proposal with id {pid}."
+            return f"No pending {kind} proposal with id {pid}."
         for p in proposals:
             if str(p["id"]) == str(pid):
                 p["status"], p["resolved_date"] = "rejected", resolved
@@ -731,7 +733,7 @@ def cmd_approveall(args):
                 else:
                     results.append("profile: batch apply failed — left pending")
         except Exception as e:
-            results.append(f"profile: ⚠️ {e}")
+            results.append(f"profile: failed: {e}")
 
     if kind in ("term", "both"):
         try:
@@ -756,9 +758,9 @@ def cmd_approveall(args):
                     save_proposals(proposals)
                     results.append(f"term: applied {applied}/{len(pending)}")
         except Exception as e:
-            results.append(f"term: ⚠️ {e}")
+            results.append(f"term: failed: {e}")
 
-    return "✅ Approve-all results:\n" + "\n".join(f"• {r}" for r in results)
+    return "Approve-all results:\n" + "\n".join(f"• {r}" for r in results)
 
 
 def cmd_done(args):
@@ -770,10 +772,10 @@ def cmd_done(args):
         from term_context import mark_assessment_done
         matched = mark_assessment_done(subject, name)
         if not matched:
-            return f"⚠️ No {subject} assessment matching “{name}”. Nothing changed."
-        return f"✅ Marked {subject} — {matched} as submitted."
+            return f"No {subject} assessment matching “{name}”. Nothing changed."
+        return f"Marked {subject} — {matched} as submitted."
     except Exception as e:
-        return f"⚠️ {e}"
+        return f"Failed: {e}"
 
 
 def cmd_internship(args):
@@ -790,9 +792,9 @@ def cmd_internship(args):
     try:
         from term_context import update_internship
         update_internship(company, **kwargs)
-        return f"✅ Updated {company}: {kwargs}"
+        return f"Updated {company}: {kwargs}"
     except Exception as e:
-        return f"⚠️ {e}"
+        return f"Failed: {e}"
 
 
 def cmd_mentor(args):
@@ -805,9 +807,9 @@ def cmd_mentor(args):
     try:
         from term_context import update_mentor
         update_mentor(topic, awaiting=awaiting)
-        return f"✅ Mentor updated — topic: {topic} | awaiting={awaiting}"
+        return f"Mentor updated — topic: {topic} | awaiting={awaiting}"
     except Exception as e:
-        return f"⚠️ {e}"
+        return f"Failed: {e}"
 
 
 def cmd_draftmentor(args):
@@ -817,12 +819,12 @@ def cmd_draftmentor(args):
         from followups import maybe_draft_mentor_followup
         info = maybe_draft_mentor_followup(force=force)
     except Exception as e:
-        return f"⚠️ Draft failed: {e}"
+        return f"Draft failed: {e}"
     if info.get("drafted"):
         subject = info.get("subject") or ""
         to_addr = info.get("to") or ""
         link = info.get("link") or ""
-        return f'✅ Draft created in Gmail: "{subject}" → {to_addr}\n{link}'
+        return f'Draft created in Gmail: "{subject}" → {to_addr}\n{link}'
     note = info.get("brief_note")
     skipped = info.get("skipped") or "nothing to draft"
     if note:
@@ -840,10 +842,10 @@ def cmd_remote(args):
         from remote_work import start_session
         session_id, error = start_session(project, instruction, open_pr=open_pr)
     except Exception as e:
-        return f"⚠️ Remote work failed to start: {e}"
+        return f"Remote work failed to start: {e}"
     if error:
-        return f"⚠️ {error}"
-    return f"🛠️ Started remote-work session [{session_id}] — I'll ping you when it's done."
+        return f"Failed: {error}"
+    return f"Started remote-work session [{session_id}] — I'll ping you when it's done."
 
 
 def cmd_remotestatus(args):
@@ -854,7 +856,7 @@ def cmd_remotestatus(args):
         from remote_work import check_session
         return check_session(args[0])
     except Exception as e:
-        return f"⚠️ Could not check remote-work status: {e}"
+        return f"Could not check remote-work status: {e}"
 
 
 def cmd_addproject(args):
@@ -867,10 +869,10 @@ def cmd_addproject(args):
         from remote_work import register_project
         info, error = register_project(name, repo_query)
     except Exception as e:
-        return f"⚠️ Could not register project: {e}"
+        return f"Could not register project: {e}"
     if error:
-        return f"⚠️ {error}"
-    return f"📎 Registered '{name}' → {info['full_name']} (default branch: {info['default_branch']})"
+        return f"Failed: {error}"
+    return f"Registered '{name}' → {info['full_name']} (default branch: {info['default_branch']})"
 
 
 def cmd_log(args):
@@ -887,7 +889,7 @@ def cmd_log(args):
     else:
         with episodic.open("a") as f:
             f.write(f"\n\n{header}\n- (telegram) {text}")
-    return f"✅ Logged to episodic: {text}"
+    return f"Logged to episodic: {text}"
 
 
 # Units checked by /status. Keep the always-on list in step with watchdog.ALWAYS_ON.
@@ -912,12 +914,12 @@ def cmd_status(_args):
 
     Replies are sent as plain text (no parse_mode), so this returns a plain string.
     """
-    lines = ["🩺 Jarvis status"]
+    lines = ["Jarvis status"]
 
     # Always-on services: the .service itself should be active.
     for unit in STATUS_ALWAYS_ON:
         state = _systemctl("systemctl", "is-active", f"{unit}.service")
-        mark = "✅" if state == "active" else "❌"
+        mark = "up  " if state == "active" else "DOWN"
         lines.append(f"{mark} {unit.replace('jarvis-', '')}: {state or 'unknown'}")
 
     # Timer-driven units: the timer should be active; flag a failed last run.
@@ -927,11 +929,11 @@ def cmd_status(_args):
         failed = _systemctl("systemctl", "is-failed", f"{unit}.service")
         name = unit.replace("jarvis-", "")
         if failed == "failed":
-            lines.append(f"⚠️ {name}: last run FAILED")
+            lines.append(f"FAIL {name}: last run failed")
         elif active == "active":
-            lines.append(f"✅ {name}: scheduled")
+            lines.append(f"ok   {name}: scheduled")
         else:
-            lines.append(f"❌ {name}: {active or 'unknown'}")
+            lines.append(f"DOWN {name}: {active or 'unknown'}")
 
     # Host health.
     disk = _systemctl("df", "-h", "/").splitlines()
@@ -952,7 +954,7 @@ def cmd_outlines(_args):
         import course_outlines
         return "Course outlines:\n" + "\n".join(course_outlines.refresh(force=True))
     except Exception as e:
-        return f"⚠️ Outline refresh failed: {e}"
+        return f"Outline refresh failed: {e}"
 
 
 COMMANDS = {
@@ -1036,9 +1038,9 @@ def _finalize_checkin():
         evening_checkin.save_responses(responses)
         summary = evening_checkin.generate_summary(responses)
         evening_checkin.save_summary(summary, responses["date"])
-        send_message("✅ Check-in saved. Here's the read on today:\n\n" + summary)
+        send_message("Check-in saved. Here's the read on today:\n\n" + summary)
     except Exception as e:
-        send_message(f"⚠️ Check-in error while saving/summarising: {e}")
+        send_message(f"Check-in error while saving/summarising: {e}")
     finally:
         _reset_checkin()
 
@@ -1057,7 +1059,7 @@ def start_checkin():
         current=None,
     )
     send_message(
-        f"🌙 Evening check-in. Today was {responses['pplrul_today']}, "
+        f"Evening check-in. Today was {responses['pplrul_today']}, "
         f"tomorrow is {responses['pplrul_tomorrow']}.\n"
         "Answer what you can — reply 'skip' to skip any question, /cancel to stop."
     )
@@ -1194,7 +1196,7 @@ def handle_update(update, static_context_holder):
             )
             meta = {"source": "claude"}
         except Exception as e:
-            reply = f"⚠️ Claude error: {e}"
+            reply = f"Claude error: {e}"
             meta = {"source": "error"}
     else:
         meta = {"source": "command"}
@@ -1217,7 +1219,7 @@ def run_listener():
     REFRESH_SECONDS = 3600
 
     print(f"🤖  Jarvis Telegram listener online — chat_id={config.TELEGRAM_CHAT_ID}")
-    send_message("🤖 Jarvis online. Send /help for commands.")
+    send_message("Jarvis online. Send /help for commands.")
 
     offset = load_offset()
     while True:
@@ -1260,7 +1262,7 @@ if __name__ == "__main__":
         if not config.TELEGRAM_CHAT_ID:
             print("❌  Run --setup first.")
             sys.exit(1)
-        send_message("🤖 Jarvis online (test message). All wiring works.")
+        send_message("Jarvis online (test message). All wiring works.")
         print("✅  Test message sent.")
     else:
         run_listener()
