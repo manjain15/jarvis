@@ -5,6 +5,9 @@ One file per day, data/ledger/YYYY-MM-DD.json. It holds that day's
 commitments (gym, steps; study and area items come later), the evidence
 events that arrived for it, and the debt carried in from the day before.
 
+A new gym day targets DEFAULT_GYM_MINUTES (45). Carried gym debt is added
+on top of that base. A day already stored keeps its own base_minutes.
+
 Everything that enforces or reports on the day reads this file: the
 Telegram enforcer, the morning brief, and GET /today. Phone evidence
 (iOS Shortcuts) arrives through POST /events and lands here via
@@ -40,7 +43,7 @@ LEDGER_DIR = SCRIPT_DIR / "data" / "ledger"
 TIMEZONE = pytz.timezone(config.TIMEZONE)
 
 DEFAULT_GYM_SLOT = os.environ.get("JARVIS_GYM_SLOT", "06:30")
-DEFAULT_GYM_MINUTES = 60
+DEFAULT_GYM_MINUTES = 45
 STEP_TARGET = 10_000
 STEP_DEBT_CAP = 3_000
 MAX_STEPS = 100_000

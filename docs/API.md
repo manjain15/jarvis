@@ -372,6 +372,18 @@ curl -sS -H "Authorization: Bearer $PHONE_TOKEN" \
 the split, wake time, sleep, each commitment (gym, steps) with its status,
 the carried debt, and `event_count`. The raw event log is not returned.
 
+A gym item on a newly built day looks like:
+
+```json
+{"id": "gym", "kind": "gym", "title": "Legs", "slot": "06:30",
+ "base_minutes": 45, "minutes": 45, "status": "pending"}
+```
+
+`base_minutes` and `minutes` start at 45 (`ledger.DEFAULT_GYM_MINUTES`).
+Carried `debt.gym_minutes` is added to `minutes` only. A miss schedules a
+make-up of `base_minutes` + 10. A day file that already exists keeps the
+target it was planned with.
+
 ### Evening check-in
 
 `GET /checkin/today` returns `facts` (gym, steps, study blocks, weekly checks,

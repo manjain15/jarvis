@@ -284,7 +284,11 @@ def routine_busy(plan, date):
 
 
 def gym_period(gym, date, travel):
-    """The time a gym session takes out of the day, travel both ways included."""
+    """
+    The time a gym session takes out of the day, travel both ways included.
+    Length is the ledger target (the 45-minute base plus any gym debt) plus
+    travel and GYM_AFTER_MIN.
+    """
     start = _at(date, _hm(gym["slot"])) - datetime.timedelta(minutes=travel)
     end = _at(date, _hm(gym["slot"])) + datetime.timedelta(minutes=gym["minutes"] + travel + GYM_AFTER_MIN)
     return start, end

@@ -162,7 +162,7 @@ def test_requested_blocks_put_lectures_first_and_interleave():
 
 
 def test_gym_slot_moves_only_on_a_clash():
-    gym = {"slot": "06:30", "minutes": 60}
+    gym = {"slot": "06:30", "minutes": 45}
     assert day_plan.choose_gym_slot(gym, TUESDAY, [], 5) == "06:30"
     clash = [(at(7, 0), at(8, 0))]
     assert day_plan.choose_gym_slot(gym, TUESDAY, clash, 5) == "08:15"
@@ -186,9 +186,13 @@ def test_build_writes_calendar_and_ledger():
     assert total <= 240
     stored = ledger.load_day(TUESDAY)
     assert stored["planned"]
-    # Nothing overlaps the gym (06:25–08:05) and nothing starts before 08:15.
+    gym = ledger.find_item(stored, "gym")
+    assert gym["base_minutes"] == 45
+    assert gym["minutes"] == 45
+    # Gym period is 06:25–07:50 (45 min + 5 travel + 30 after). The 15-min
+    # buffer puts the first study gap at 08:05.
     for i in items:
-        assert datetime.datetime.fromisoformat(i["start"]) >= at(8, 15)
+        assert datetime.datetime.fromisoformat(i["start"]) >= at(8, 5)
     assert [i["type"] for i in items][0] == "lecture"
 
 

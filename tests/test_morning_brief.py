@@ -144,10 +144,10 @@ def _at(h, m=0):
 DAY = {
     "date": "2026-10-12", "split": "Pull",
     "debt": {"gym_minutes": 20, "steps": 1160,
-             "makeup": {"split": "Push", "minutes": 70, "due": "2026-10-13", "from": "2026-10-11"}},
+             "makeup": {"split": "Push", "minutes": 55, "due": "2026-10-13", "from": "2026-10-11"}},
     "items": [
-        {"id": "gym", "kind": "gym", "title": "Pull", "slot": "06:30", "base_minutes": 60,
-         "minutes": 80, "status": "pending"},
+        {"id": "gym", "kind": "gym", "title": "Pull", "slot": "06:30", "base_minutes": 45,
+         "minutes": 65, "status": "pending"},
         {"id": "steps", "kind": "steps", "title": "Steps", "target": 11160, "count": 0, "status": "pending"},
         {"id": "study-1", "kind": "study", "title": "Study · MATH2931", "task": "W5 tutorial Qs",
          "start": "2026-10-12T19:00+11:00", "end": "2026-10-12T20:00+11:00", "minutes": 60},
@@ -162,14 +162,14 @@ def test_today_rows_merge_and_sort():
            {"start": None, "title": "Mum's birthday", "location": ""}]
     rows = morning_brief.today_rows(DAY, cal, [], travel_minutes=5)
     assert [r["time"] for r in rows] == ["All day", "06:30", "09:30", "11:00", "19:00"]
-    assert rows[1] == {"time": "06:30", "title": "Pull", "sub": "Leave by 06:25 · 80 min with debt", "miss": False}
+    assert rows[1] == {"time": "06:30", "title": "Pull", "sub": "Leave by 06:25 · 65 min with debt", "miss": False}
     assert rows[2]["sub"] == "Office"
     assert rows[4]["sub"] == "W5 tutorial Qs · 60 min"
 
 
 def test_owed_rows():
     rows = morning_brief.owed_rows(DAY, MON)
-    assert rows[0] == {"label": "Gym make-up · Push · by Tue", "value": "70 min", "miss": True}
+    assert rows[0] == {"label": "Gym make-up · Push · by Tue", "value": "55 min", "miss": True}
     assert rows[1]["value"] == "+20 min"
     assert rows[2] == {"label": "Steps carried from yesterday", "value": "+1,160", "miss": False}
     assert morning_brief.owed_rows({"debt": {"gym_minutes": 0, "steps": 0, "makeup": None}}, MON) == []

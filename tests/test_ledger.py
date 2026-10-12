@@ -39,7 +39,8 @@ def test_gym_day_has_gym_and_steps(store):
     gym = ledger.find_item(day, "gym")
     assert gym["title"] == "Push"
     assert gym["slot"] == ledger.DEFAULT_GYM_SLOT
-    assert gym["minutes"] == ledger.DEFAULT_GYM_MINUTES
+    assert gym["base_minutes"] == ledger.DEFAULT_GYM_MINUTES == 45
+    assert gym["minutes"] == 45
     assert ledger.find_item(day, "steps")["target"] == 10_000
     assert day["debt"] == {"gym_minutes": 0, "steps": 0, "makeup": None}
 
@@ -54,8 +55,21 @@ def test_debt_carries_and_step_debt_is_capped(store):
     previous = {"debt": {"gym_minutes": 10, "steps": 4_500}}
     day = ledger.build_day(MONDAY, previous)
     assert day["debt"] == {"gym_minutes": 10, "steps": 4_500, "makeup": None}
-    assert ledger.find_item(day, "gym")["minutes"] == 70
+    gym = ledger.find_item(day, "gym")
+    assert gym["base_minutes"] == 45
+    assert gym["minutes"] == 55
     assert ledger.find_item(day, "steps")["target"] == 13_000
+
+
+def test_reapply_debt_keeps_a_stored_base(store):
+    """An already-built day keeps its own base when debt is applied again."""
+    day = ledger.build_day(MONDAY)
+    gym = ledger.find_item(day, "gym")
+    gym["base_minutes"] = 60
+    gym["minutes"] = 60
+    ledger.apply_carried_debt(day, {"debt": {"gym_minutes": 10, "steps": 0}})
+    assert gym["base_minutes"] == 60
+    assert gym["minutes"] == 70
 
 
 def test_get_or_create_reads_previous_day_from_disk(store):
