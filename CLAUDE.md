@@ -128,7 +128,9 @@ Never write outside `/Users/manavjain/jarvis/`.
   wake / gym_arrive / steps / sleep to `POST /events` (phone token). The
   Telegram daemon calls `enforcer.tick()` each loop to run the wake sequence,
   handles `up`, `skip <reason>` and photos, verifies with Hevy, and settles
-  make-up debt at 23:00. No Anthropic calls. Money stakes are deferred (trial).
+  make-up debt at 23:00. `pace.tick()` nudges when behind step pace (10/13/16/19/21h)
+  and the 23:00 close turns the shortfall into tomorrow's step debt.
+  No Anthropic calls. Money stakes are deferred (trial).
 
 ## Git
 

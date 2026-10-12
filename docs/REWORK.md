@@ -106,11 +106,22 @@ Google Health stays as the next-day check.
 | 19:00 | 8,500 |
 | 21:00 | 10,000 (+ debt) |
 
-Jarvis only messages when Manav is behind, with a fix sized to the gap from
-the calendar: `2,300 behind. 40 free min before 15:00 tute — walk there.`
-At ~100 steps/min, the gap converts to minutes. No Claude call.
+The pace scales with the day's target (25 / 50 / 70 / 85 / 100%), so step
+debt raises every checkpoint.
 
-The 21:00 shortfall becomes tomorrow's debt (cap +3,000).
+Jarvis only messages when Manav is behind. The fix is sized at ~100 steps/min
+and placed in the calendar: `2,000 behind 5,000 pace. 20 min walk. Next free 14:00–15:00.`
+No Claude call.
+
+- Each checkpoint waits up to 20 min for its own Shortcut reading, so an
+  earlier app-open reading can't trigger a false nudge.
+- No usable reading means unknown, not behind. A count of 0 (locked phone) is
+  not a reading.
+- Several checkpoints due at once send one message. Ones over an hour old
+  (daemon down) are skipped.
+
+At 23:00 the shortfall against the day's target becomes tomorrow's debt
+(cap +3,000). A day with no readings carries nothing.
 
 ## 7. Debt
 
