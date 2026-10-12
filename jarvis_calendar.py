@@ -105,6 +105,38 @@ def get_today_events():
     return sorted(events, key=lambda x: x["start"])
 
 
+def get_busy_periods():
+    """
+    Today's timed calendar events and UNSW classes as sorted (start, end)
+    tz-aware tuples. All-day events are skipped. The timetable is optional.
+    """
+    tz    = TIMEZONE
+    today = datetime.datetime.now(tz).date()
+    start = datetime.datetime.combine(today, datetime.time.min).astimezone(tz)
+    end   = datetime.datetime.combine(today, datetime.time.max).astimezone(tz)
+
+    result = get_calendar_service().events().list(
+        calendarId="primary",
+        timeMin=start.isoformat(),
+        timeMax=end.isoformat(),
+        singleEvents=True,
+        orderBy="startTime",
+    ).execute()
+
+    busy = []
+    for e in result.get("items", []):
+        s, f = e.get("start", {}), e.get("end", {})
+        if "dateTime" in s and "dateTime" in f:
+            busy.append((datetime.datetime.fromisoformat(s["dateTime"]).astimezone(tz),
+                         datetime.datetime.fromisoformat(f["dateTime"]).astimezone(tz)))
+    try:
+        import uni_timetable
+        busy.extend(uni_timetable.get_busy_blocks())
+    except Exception:
+        pass
+    return sorted(busy)
+
+
 def get_free_blocks(min_duration_mins=45):
     """
     Returns free time blocks today (gaps between events).

@@ -123,6 +123,13 @@ Never write outside `/Users/manavjain/jarvis/`.
 - **Calendar deadline sync**: removed — UNSW ICS already syncs assessment dates
   into Google Calendar, so Jarvis does not create `[Jarvis]` events.
 
+- **Daily ledger + gym enforcer** (`ledger.py`, `enforcer.py`, spec in
+  `docs/REWORK.md`): `data/ledger/YYYY-MM-DD.json` per day. iOS Shortcuts post
+  wake / gym_arrive / steps / sleep to `POST /events` (phone token). The
+  Telegram daemon calls `enforcer.tick()` each loop to run the wake sequence,
+  handles `up`, `skip <reason>` and photos, verifies with Hevy, and settles
+  make-up debt at 23:00. No Anthropic calls. Money stakes are deferred (trial).
+
 ## Git
 
 - Never include Co-Authored-By lines (or any AI attribution) in commit messages.

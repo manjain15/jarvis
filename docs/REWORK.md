@@ -39,7 +39,7 @@ New module `ledger.py`. One file per day: `data/ledger/YYYY-MM-DD.json`.
       "id": "gym",
       "kind": "gym",               // gym | steps | study | area
       "title": "Push",
-      "slot": "07:15",
+      "slot": "06:30",
       "minutes": 60,
       "evidence": "geofence+hevy", // what counts as proof
       "status": "pending",         // pending | done | partial | missed | excused | moved
@@ -59,7 +59,7 @@ way `term_context` writes.
 
 New timer `jarvis-plan` at 05:30. It builds today's ledger from:
 
-- **Gym**: the split label (`get_pplrul_day`), with a slot picked from the calendar's first free 75 min after 06:30. Default 07:15.
+- **Gym**: the split label (`get_pplrul_day`), with a slot picked from the calendar's first free 75 min after 06:30. Default 06:30 (`JARVIS_GYM_SLOT`), 5 min travel (`JARVIS_GYM_TRAVEL_MIN`), so leave by 06:25.
 - **Steps**: 10,000 + carried step debt, capped at +3,000.
 - **Study blocks**: weighted by assessment proximity (`study_tracker`), this week's topics (`course_schedule`), weekly per-course hour targets (new, in `term_context.json`), and free calendar gaps (`uni_timetable` + Google Calendar). Written to Google Calendar as `Study · MATH2931` with a private extended property `jarvis=1`, so Jarvis can find and update its own events. No `[Jarvis]` prefix.
 - **One area push**: the most neglected area (see §8).
@@ -76,7 +76,7 @@ Telegram, on a gym day:
 
 | t | Message | Proof | If missed |
 |---|---|---|---|
-| wake | `07:04 · Push · leave by 07:20` | reply `up` within 3 min | resend + "3 min" |
+| wake | `06:00 · Push · leave by 06:25` | reply `up` within 3 min | resend + "3 min" |
 | +3 | `Clothes on.` | photo within 10 min | resend |
 | slot −0:10 | `Leave now.` | — | — |
 | slot +0:30 | — | geofence `POST /events {"type":"gym_arrive"}` | `No arrival. Reason, or go.` |
@@ -114,9 +114,21 @@ The 21:00 shortfall becomes tomorrow's debt (cap +3,000).
 
 ## 7. Debt
 
-- A missed gym session is made up within 48h, plus 10 min. It shows at the top of every Telegram message and in the brief's Owed section until cleared.
-- Gym debt not cleared within 48h rolls into the next session's target (+10 min more). It never goes away silently.
-- A step shortfall carries to the next day (cap +3,000).
+Settled when the day closes (23:00, or on the next tick if the daemon was down).
+
+| Outcome | Rule | Debt |
+|---|---|---|
+| done | Hevy minutes ≥ target − 15 | clears `gym_minutes` |
+| partial | ≥ 25 min | none |
+| excused | `skip sick` | none, shown in the weekly review |
+| unenforced | the sequence never ran that day (before go-live, daemon down all morning) | none |
+| missed | anything else | a **make-up**: the session + 10 min within 2 days |
+
+- **Make-up**: an extra workout. Either a rest-day session, or minutes beyond that day's target. It clears when the extra minutes are ≥ make-up − 15.
+- **Make-up not done by its due date**: +20 min on every gym session until one hits the longer target.
+- **A second miss while a make-up is owed**: +10 min on the next session.
+- **Steps**: a shortfall carries to the next day (cap +3,000). Built in phase 3.
+- Messages are sent only inside their window. After a restart, overdue reminders are dropped instead of sent all at once.
 
 **Money stakes are deferred.** The first 4 weeks are a trial with debt only.
 At the end of the trial, the weekly review shows, per week:

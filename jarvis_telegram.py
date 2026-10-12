@@ -68,6 +68,13 @@ import anthropic
 import config
 import evening_checkin
 
+try:
+    import enforcer
+    ENFORCER_AVAILABLE = True
+except Exception as _e:
+    print(f"⚠️  enforcer unavailable: {_e}")
+    ENFORCER_AVAILABLE = False
+
 SCRIPT_DIR  = Path(__file__).parent
 DATA_DIR    = SCRIPT_DIR / "data"
 MEMORY_DIR  = SCRIPT_DIR / "memory"
@@ -1053,6 +1060,27 @@ def maybe_autostart_checkin():
     start_checkin()
 
 
+# ── Gym enforcer glue ───────────────────────────────────────────────────────
+# Enforcer messages are not written to the conversation thread, like check-in turns.
+
+def _enforcer_call(fn, *args):
+    """Call an enforcer entry point. A failure is logged, never raised into the loop."""
+    try:
+        return fn(*args)
+    except Exception as e:
+        print(f"⚠️  enforcer.{fn.__name__} failed: {e}")
+        return None
+
+
+def run_enforcer_tick():
+    """Advance the gym sequence and send whatever it returns."""
+    if not ENFORCER_AVAILABLE:
+        return
+    for text in _enforcer_call(enforcer.tick) or []:
+        send_message(text)
+        print(f"🏋️  → {text[:80]}")
+
+
 # ── Main listener loop ──────────────────────────────────────────────────────
 
 def handle_update(update, static_context_holder):
@@ -1063,6 +1091,12 @@ def handle_update(update, static_context_holder):
     chat_id = msg["chat"]["id"]
     if chat_id != config.TELEGRAM_CHAT_ID:
         print(f"⚠️  Ignoring message from unauthorised chat {chat_id}")
+        return
+
+    if msg.get("photo"):
+        reply = _enforcer_call(enforcer.handle_photo) if ENFORCER_AVAILABLE else None
+        if reply:
+            send_message(reply)
         return
 
     text = msg.get("text", "").strip()
@@ -1084,6 +1118,13 @@ def handle_update(update, static_context_holder):
     if CHECKIN["active"]:
         handle_checkin_reply(text)
         return
+
+    # ── Gym enforcer: "up" and "skip <reason>" on a gym day ──────────────────
+    if ENFORCER_AVAILABLE:
+        reply = _enforcer_call(enforcer.handle_text, text)
+        if reply:
+            send_message(reply)
+            return
 
     # ── Normal path: persist to thread, route command or Claude ───────────────
     append_turn("user", text)
@@ -1132,6 +1173,7 @@ def run_listener():
                 static_context_holder["ts"]   = time.time()
 
             maybe_autostart_checkin()
+            run_enforcer_tick()
 
             updates = get_updates(offset)
             for upd in updates:

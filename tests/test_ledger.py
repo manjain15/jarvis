@@ -41,7 +41,7 @@ def test_gym_day_has_gym_and_steps(store):
     assert gym["slot"] == ledger.DEFAULT_GYM_SLOT
     assert gym["minutes"] == ledger.DEFAULT_GYM_MINUTES
     assert ledger.find_item(day, "steps")["target"] == 10_000
-    assert day["debt"] == {"gym_minutes": 0, "steps": 0}
+    assert day["debt"] == {"gym_minutes": 0, "steps": 0, "makeup": None}
 
 
 def test_rest_day_has_only_steps(store):
@@ -53,7 +53,7 @@ def test_rest_day_has_only_steps(store):
 def test_debt_carries_and_step_debt_is_capped(store):
     previous = {"debt": {"gym_minutes": 10, "steps": 4_500}}
     day = ledger.build_day(MONDAY, previous)
-    assert day["debt"] == {"gym_minutes": 10, "steps": 4_500}
+    assert day["debt"] == {"gym_minutes": 10, "steps": 4_500, "makeup": None}
     assert ledger.find_item(day, "gym")["minutes"] == 70
     assert ledger.find_item(day, "steps")["target"] == 13_000
 
