@@ -566,8 +566,7 @@ def cmd_help(_args):
         "/remote project \"instruction\" [--pr] — start a headless remote-work session\n"
         "/remotestatus project — check the latest remote-work session\n"
         "/status — health-check the VPS daemons\n"
-        "/checkin — start the evening check-in now\n"
-        "/cancel — abort an in-progress check-in\n"
+        "(the evening check-in runs in the Grok coach bot at 21:00)\n"
         "\nAnything else → I respond conversationally."
     )
 
@@ -1161,7 +1160,7 @@ def handle_update(update, static_context_holder):
         send_message(msg_out)
         return
     if cmd_word == "/checkin":
-        start_checkin()
+        send_message("The check-in moved to the coach bot in Grok. It starts at 21:00.")
         return
     if CHECKIN["active"]:
         handle_checkin_reply(text)
@@ -1227,7 +1226,7 @@ def run_listener():
                 static_context_holder["text"] = build_static_context()
                 static_context_holder["ts"]   = time.time()
 
-            maybe_autostart_checkin()
+            # The 21:00 check-in runs in the Grok coach bot since phase 6.
             run_enforcer_tick()
 
             updates = get_updates(offset)

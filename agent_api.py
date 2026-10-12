@@ -41,6 +41,8 @@ COST:
   A weekly Money check should call GET /finance, not poll it.
   POST /events (phone Shortcuts) and GET /today read and write the daily
   ledger (ledger.py, data/ledger/). No Anthropic.
+  GET /checkin/today and GET/PATCH /areas don't call Anthropic (GET /areas
+  may call GitHub, at most hourly). POST /checkin is one small Claude call.
 
 SETUP:
   Add JARVIS_API_TOKEN to .env (32+ characters). Optionally add
@@ -85,10 +87,10 @@ DEFAULT_PORT = 5557
 # not listed: only the legacy JARVIS_API_TOKEN (actor "owner") can call them,
 # unless you add the path to a bot here.
 BOT_ROUTE_ALLOWLIST = {
-    "career": ("/health", "/flags", "/context", "/mentor", "/internships", "/today"),
+    "career": ("/health", "/flags", "/context", "/mentor", "/internships", "/today", "/areas"),
     "study": ("/health", "/flags", "/context", "/today"),
     "money": ("/health", "/finance", "/spend", "/flags", "/today"),
-    "coach": ("/health", "/flags", "/context", "/today"),
+    "coach": ("/health", "/flags", "/context", "/today", "/checkin", "/areas"),
     # iOS Shortcuts: wake, gym arrival, steps, sleep. Write-only.
     "phone": ("/health", "/events"),
 }
@@ -677,6 +679,34 @@ def get_today_payload():
     """Today's commitments and debt from the ledger."""
     from ledger import today_payload
     return today_payload()
+
+
+def get_checkin_payload():
+    """Today's check-in: facts from the ledger and the questions to ask."""
+    from evening_checkin import today_checkin
+    return today_checkin()
+
+
+def apply_checkin(body):
+    """Save the coach's check-in answers. Raises ValueError on a bad body."""
+    from evening_checkin import submit_checkin
+    return submit_checkin(body)
+
+
+def get_areas_payload():
+    """Areas with days since touched and the most neglected one."""
+    import areas
+    return areas.summary(areas.refresh_evidence())
+
+
+def apply_area_patch(name, body):
+    """Update one area. Raises KeyError (unknown area) or ValueError (bad body)."""
+    import areas
+    result = areas.patch(name, body)
+    append_external_audit(_audit_entry(_actor_var.get() or OWNER_ACTOR, "area", name,
+                              (body or {}).get("reason") if isinstance(body, dict) else None,
+                              None, {k: v for k, v in (body or {}).items() if k not in ("actor", "reason")}))
+    return result
 
 
 def log_spend_entry(amount, category, note=""):
@@ -1592,6 +1622,50 @@ def create_app(token=None, bot_tokens=None):
         except Exception as e:
             print(f"⚠️  /today failed: {e}")
             return jsonify({"error": "today failed"}), 500
+
+    @app.get("/checkin/today")
+    def checkin_today():
+        """Facts for tonight's check-in and the 2-5 questions to ask."""
+        try:
+            return jsonify(get_checkin_payload())
+        except Exception as e:
+            print(f"⚠️  /checkin/today failed: {e}")
+            return jsonify({"error": "check-in failed"}), 500
+
+    @app.post("/checkin")
+    def checkin_submit():
+        """Answers to tonight's questions. Returns the summary and the actions taken."""
+        body = request.get_json(silent=True)
+        try:
+            return jsonify(apply_checkin(body))
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        except Exception as e:
+            print(f"⚠️  /checkin failed: {e}")
+            return jsonify({"error": "check-in failed"}), 500
+
+    @app.get("/areas")
+    def areas_get():
+        """Project, portfolio, career, networking, weight: next action, days since touched."""
+        try:
+            return jsonify(get_areas_payload())
+        except Exception as e:
+            print(f"⚠️  /areas failed: {e}")
+            return jsonify({"error": "areas failed"}), 500
+
+    @app.patch("/areas/<name>")
+    def areas_patch(name):
+        """Set an area's next action, pause it, or record that it was worked on."""
+        body = request.get_json(silent=True)
+        try:
+            return jsonify(apply_area_patch(name, body))
+        except KeyError:
+            return jsonify({"error": f"unknown area {name!r}"}), 404
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        except Exception as e:
+            print(f"⚠️  /areas/{name} failed: {e}")
+            return jsonify({"error": "area update failed"}), 500
 
     @app.patch("/mentor")
     def patch_mentor():

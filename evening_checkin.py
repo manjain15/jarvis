@@ -15,6 +15,10 @@ ARCHITECTURE (since the VPS migration):
 
   This file is import-only for the daemon. Run it directly to print the plan:
       python evening_checkin.py
+
+  Since phase 6 the check-in runs in the Grok coach bot through
+  GET /checkin/today and POST /checkin (today_checkin / submit_checkin below).
+  The Telegram 21:00 check-in is retired.
 """
 
 import json
@@ -75,14 +79,14 @@ def get_tomorrow_pplrul():
 #   followups — dict mapping a parsed answer (True/False) to a list of further
 #               steps, spliced in only when that answer is given (optional)
 
-def init_responses():
-    """Returns the base response dict (the fields not asked as questions)."""
-    today = now_sydney()
+def init_responses(now=None):
+    """Returns the base response dict (the fields not asked as questions) for now's date."""
+    today = now or now_sydney()
     return {
         "date": today.strftime("%Y-%m-%d"),
         "day_of_week": today.strftime("%A"),
-        "pplrul_today": get_pplrul_day(),
-        "pplrul_tomorrow": get_tomorrow_pplrul(),
+        "pplrul_today": get_pplrul_day(today.date()),
+        "pplrul_tomorrow": get_pplrul_day(today.date() + datetime.timedelta(days=1)),
     }
 
 
@@ -401,6 +405,301 @@ Be direct. No fluff. Write it as a handoff note from tonight-Jarvis to tomorrow-
     )
 
     return message.content[0].text
+
+
+# ── Coach check-in (Grok) ─────────────────────────────────────────────────────
+# Since phase 6 the check-in runs in the Grok coach bot, not Telegram. The bot
+# calls GET /checkin/today at 21:00: the day's facts come from the ledger, so
+# it only asks what the evidence can't answer (2-5 questions). POST /checkin
+# takes the answers; one Claude call writes tomorrow's handoff summary and
+# turns area answers into next actions. The same checkin_*.json and
+# summary_*.txt files are written, so memory_system and the brief are unchanged.
+
+LEFT_STATUSES = ("partial", "no", "no_reply")
+AREA_ASK_AFTER_DAYS = 3
+MAX_LEFT_QUESTIONS = 2
+ANSWER_LIMIT = 500
+
+
+def _ledger():
+    import ledger
+    return ledger
+
+
+def _gym_fact(day, now):
+    """The gym item as a fact, or None on a rest day."""
+    gym = _ledger().find_item(day, "gym")
+    if gym is None:
+        return None
+    return {"split": gym["title"], "slot": gym["slot"], "status": gym.get("status"),
+            "minutes": gym.get("logged_minutes"), "excuse": gym.get("excuse"),
+            "early": bool(gym.get("early"))}
+
+
+def checkin_questions(day, area_list, now):
+    """The questions the evidence can't answer, in the order the bot should ask."""
+    questions = []
+    blocks = [i for i in day.get("items", []) if i.get("kind") == "study"]
+    left = [b for b in blocks if b.get("status") in LEFT_STATUSES or (
+        b.get("status") == "pending" and datetime.datetime.fromisoformat(b["end"]) <= now)]
+    for b in left[:MAX_LEFT_QUESTIONS]:
+        questions.append({"id": f"left:{b['id']}", "kind": "text",
+                          "text": f"{b['course']} · {b['task']}: what's left?"})
+
+    gym = _ledger().find_item(day, "gym")
+    if gym is not None and gym.get("status") in ("pending", "missed") and not gym.get("excuse"):
+        questions.append({"id": "gym_reason", "kind": "text",
+                          "text": f"{gym['title']} isn't logged. Still going tonight, or what happened?"})
+
+    try:
+        import areas as areas_mod
+        pick = next(iter(areas_mod.most_neglected(area_list, now.date(), blockable_only=True)), None)
+        if pick and areas_mod.days_since(pick, now.date()) >= AREA_ASK_AFTER_DAYS:
+            days = areas_mod.days_since(pick, now.date())
+            since = "never touched" if not pick.get("last_touched") else f"{days} days untouched"
+            questions.append({"id": f"area:{pick['name']}", "kind": "text",
+                              "text": f"{pick['label']}: {since}. Next step: {pick.get('next_action') or 'none set'}. "
+                                      "What's the next concrete step, or what's blocking it?"})
+    except Exception:
+        pass
+
+    questions.append({"id": "tomorrow_focus", "kind": "text",
+                      "text": "Tomorrow's one non-negotiable?"})
+    questions.append({"id": "weight", "kind": "number", "optional": True,
+                      "text": "Weight this morning? (kg, or skip)"})
+    return questions
+
+
+def today_checkin(now=None):
+    """GET /checkin/today: today's facts and the questions to ask."""
+    now = now or now_sydney()
+    day = _ledger().get_or_create_day(now.date())
+    try:
+        import areas as areas_mod
+        area_list = areas_mod.refresh_evidence(now)
+        area_summary = areas_mod.summary(area_list, now.date())
+    except Exception as e:
+        print(f"⚠️  check-in: areas unavailable: {e}")
+        area_list, area_summary = {}, None
+    steps = _ledger().find_item(day, "steps") or {}
+    tomorrow = ""
+    try:
+        import uni_timetable
+        tomorrow = uni_timetable.get_tomorrow_summary()
+    except Exception:
+        pass
+    facts = {
+        "gym": _gym_fact(day, now),
+        "steps": {"count": steps.get("count"), "target": steps.get("target")},
+        "study": [{"id": i["id"], "course": i["course"], "type": i["type"], "task": i["task"],
+                   "status": i.get("status")} for i in day.get("items", []) if i.get("kind") == "study"],
+        "checks": [{"id": i["id"], "label": i["label"], "status": i.get("status")}
+                   for i in day.get("items", []) if i.get("kind") == "check"],
+        "area_block": next(({"area": i["area"], "task": i["task"], "status": i.get("status")}
+                            for i in day.get("items", []) if i.get("kind") == "area"), None),
+        "debt": day.get("debt"),
+        "tomorrow": {"split": get_tomorrow_pplrul(), "classes": tomorrow},
+        "areas": area_summary,
+    }
+    return {"date": day["date"], "submitted": bool(day.get("checkin")),
+            "facts": facts, "questions": checkin_questions(day, area_list, now)}
+
+
+def _clean_answers(body, question_ids):
+    """Validate a POST /checkin body. Returns (answers, notes). Raises ValueError."""
+    if not isinstance(body, dict):
+        raise ValueError("JSON object required")
+    extra = sorted(set(body) - {"answers", "notes", "actor", "reason"})
+    if extra:
+        raise ValueError(f"unknown field(s): {', '.join(extra)}")
+    answers = body.get("answers", {})
+    if not isinstance(answers, dict):
+        raise ValueError("answers must be an object of question id → answer")
+    unknown = sorted(set(answers) - set(question_ids))
+    if unknown:
+        raise ValueError(f"unknown question id(s): {', '.join(unknown)}")
+    cleaned = {}
+    for qid, value in answers.items():
+        if value is None or (isinstance(value, str) and value.strip().lower() in ("", "skip", "-")):
+            continue
+        if qid == "weight":
+            try:
+                weight = float(value)
+            except (TypeError, ValueError):
+                raise ValueError("weight must be a number of kg")
+            if not 40 <= weight <= 150:
+                raise ValueError("weight must be between 40 and 150 kg")
+            cleaned[qid] = round(weight, 1)
+            continue
+        if not isinstance(value, str) or len(value) > ANSWER_LIMIT:
+            raise ValueError(f"{qid} must be text up to {ANSWER_LIMIT} characters")
+        cleaned[qid] = value.strip()
+    notes = body.get("notes") or ""
+    if not isinstance(notes, str) or len(notes) > 2000:
+        raise ValueError("notes must be text up to 2000 characters")
+    return cleaned, notes.strip()
+
+
+def _keepup(date):
+    """On the training week's last day: {f"keepup_{code}": bool} from lecture block check-offs."""
+    try:
+        import day_plan
+        import term_context
+        start = term_context.week_start(date)
+        if (date - start).days != 6:
+            return {}
+        done = day_plan.minutes_done(start, date + datetime.timedelta(days=1))
+        targets = term_context.get_study_plan().get("targets", {})
+    except Exception:
+        return {}
+    out = {}
+    for code, t in targets.items():
+        if t.get("lectures"):
+            out[f"keepup_{code}"] = done.get((code, "lecture"), 0) >= t["lectures"] * 60 * 0.75
+    return out
+
+
+def plan_actions(facts, answers, notes):
+    """
+    One Claude call: tomorrow's handoff summary and area next actions, as
+    {"summary": str, "areas": {name: {"next_action": str, "worked_today": bool}}}.
+    Returns None when Claude isn't reachable; the caller falls back.
+    """
+    from voice import VOICE_RULES, strip_emoji
+    prompt = f"""{VOICE_RULES}
+
+Manav just finished his evening check-in. Facts from Jarvis's data and his answers are below.
+
+FACTS:
+{json.dumps(facts, default=str)[:6000]}
+
+ANSWERS (question id → answer):
+{json.dumps(answers, default=str)}
+
+NOTES:
+{notes or "none"}
+
+Return only JSON with two keys.
+"summary": under 120 words, a handoff note for tomorrow morning's brief: what happened
+today, what carries forward, and tomorrow's one non-negotiable.
+"areas": for each area mentioned in an "area:<name>" answer or in the notes, an object
+{{"next_action": one concrete step that fits a 45-minute block, under 80 characters,
+  "worked_today": true only if he says he worked on it today}}. Leave out areas he didn't mention.
+"""
+    try:
+        client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
+        message = client.messages.create(model="claude-sonnet-4-6", max_tokens=500,
+                                         messages=[{"role": "user", "content": prompt}])
+        text = message.content[0].text
+        data = json.loads(text[text.index("{"):text.rindex("}") + 1])
+    except Exception as e:
+        print(f"⚠️  check-in: action planning failed: {e}")
+        return None
+    out = {"summary": strip_emoji(str(data.get("summary") or ""))[:1200], "areas": {}}
+    for name, action in (data.get("areas") or {}).items():
+        if isinstance(action, dict) and str(action.get("next_action") or "").strip():
+            out["areas"][name] = {"next_action": strip_emoji(str(action["next_action"]))[:120],
+                                  "worked_today": bool(action.get("worked_today"))}
+    return out
+
+
+def _fallback_summary(facts, answers):
+    """Plain handoff text when Claude isn't available."""
+    gym = facts.get("gym")
+    lines = ["YESTERDAY SUMMARY:"]
+    lines.append(f"  Gym: {gym['split']} {gym['status']}" if gym else "  Gym: rest day")
+    steps = facts.get("steps") or {}
+    if steps.get("count"):
+        lines.append(f"  Steps: {steps['count']:,} / {steps['target']:,}")
+    done = [s for s in facts.get("study", []) if s["status"] == "done"]
+    lines.append(f"  Study blocks done: {len(done)} / {len(facts.get('study', []))}")
+    carry = [f"  - {v}" for k, v in answers.items() if k.startswith(("left:", "area:")) or k == "gym_reason"]
+    if carry:
+        lines += ["CARRY-FORWARD:"] + carry
+    if answers.get("tomorrow_focus"):
+        lines += ["TOMORROW CONTEXT:", f"  One non-negotiable: {answers['tomorrow_focus']}"]
+    return "\n".join(lines)
+
+
+def submit_checkin(body, now=None, actions_fn=None):
+    """
+    POST /checkin: validate answers, apply them, and write the check-in files.
+    Returns {"ok", "summary", "actions"}: actions are short lines the bot can read back.
+    Raises ValueError on a bad body.
+    """
+    now = now or now_sydney()
+    actions_fn = actions_fn or plan_actions
+    current = today_checkin(now)
+    answers, notes = _clean_answers(body, [q["id"] for q in current["questions"]])
+    facts = current["facts"]
+    lines = []
+
+    # Leftover study: tomorrow's plan carries "Finish: <what's left>".
+    def _left(day):
+        for qid, text in answers.items():
+            if qid.startswith("left:"):
+                item = _ledger().find_item(day, qid.split(":", 1)[1])
+                if item is not None:
+                    item["left"] = text
+                    if item.get("status") == "pending":
+                        item["status"] = "no"
+        day["checkin"] = now.isoformat(timespec="seconds")
+    _ledger().update_day(now.date(), _left)
+    for qid, text in answers.items():
+        if qid.startswith("left:"):
+            lines.append(f"Tomorrow's plan carries: {text}")
+
+    planned = actions_fn(facts, answers, notes)
+    summary = (planned or {}).get("summary") or _fallback_summary(facts, answers)
+
+    try:
+        import areas as areas_mod
+        area_updates = dict((planned or {}).get("areas") or {})
+        for qid, text in answers.items():
+            if qid.startswith("area:") and qid.split(":", 1)[1] not in area_updates and planned is None:
+                area_updates[qid.split(":", 1)[1]] = {"next_action": text[:120], "worked_today": False}
+
+        def _apply(area_list):
+            done = []
+            for name, update in area_updates.items():
+                if name not in area_list:
+                    continue
+                area_list[name]["next_action"] = update["next_action"]
+                if update.get("worked_today"):
+                    areas_mod.touch(area_list, name, now.date(), "checkin")
+                done.append(f"{area_list[name]['label']}: next step is \"{update['next_action']}\"")
+            if "weight" in answers and "weight" in area_list:
+                areas_mod.touch(area_list, "weight", now.date(), "checkin")
+            return done
+        lines += areas_mod.mutate(_apply)
+    except Exception as e:
+        print(f"⚠️  check-in: areas update failed: {e}")
+
+    gym = facts.get("gym")
+    responses = init_responses(now)
+    responses.update({
+        "source": "coach",
+        "workout_done": bool(gym and gym["status"] in ("done", "partial")) if gym else None,
+        "rest_day_active_recovery": None,
+        "workout_skip_reason": answers.get("gym_reason"),
+        "weight_today": answers.get("weight"),
+        "tomorrow_focus": answers.get("tomorrow_focus"),
+        "uni_work_done": any(s["status"] in ("done", "partial") for s in facts.get("study", [])),
+        "uni_work_details": "; ".join(f"{s['course']} {s['task']} ({s['status']})" for s in facts.get("study", [])),
+        "project_work_done": None,
+        "anything_else": notes or None,
+        "answers": answers,
+        "facts": facts,
+        **_keepup(now.date()),
+    })
+    for qid, text in answers.items():
+        if qid.startswith("area:"):
+            responses[f"area_{qid.split(':', 1)[1]}"] = text
+    save_responses(responses)
+    save_summary(summary, responses["date"])
+    if answers.get("tomorrow_focus"):
+        lines.append(f"Tomorrow's non-negotiable: {answers['tomorrow_focus']}")
+    return {"ok": True, "date": responses["date"], "summary": summary, "actions": lines}
 
 
 # ── CLI (plan dump only — terminal check-in is retired) ─────────────────────────

@@ -187,6 +187,9 @@ def maybe_draft_mentor_followup(creds=None, force: bool = False,
         result["skipped"] = f"term_context unavailable: {e}"
         return result
 
+    if mentor.get("paused"):
+        result["skipped"] = "mentor follow-ups paused"
+        return result
     days = _mentor_silent_days(mentor)
     if days is None:
         result["skipped"] = "not awaiting response (or no last_contact)"

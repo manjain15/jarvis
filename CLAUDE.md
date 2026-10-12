@@ -152,6 +152,13 @@ Never write outside `/Users/manavjain/jarvis/`.
   a rest day counts for the next training day (`hevy.assign_sessions`; the
   enforcer skips the morning sequence when it finds one).
 
+- **Coach check-in + areas** (phase 6): the Grok coach bot runs the 21:00 check-in
+  via `GET /checkin/today` / `POST /checkin` (`evening_checkin.py`); the Telegram
+  check-in is retired. `areas.py` (`data/areas.json`) tracks project, portfolio,
+  career, networking, weight; the plan adds a 45-min block for the most neglected
+  unpaused area and the brief's push uses it. `mentor.paused` stops follow-ups.
+  Bot instructions: `docs/grok_bots.md`.
+
 ## Git
 
 - Never include Co-Authored-By lines (or any AI attribution) in commit messages.
