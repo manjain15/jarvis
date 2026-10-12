@@ -36,7 +36,13 @@ def at(hour, minute=0, date=MONDAY):
     return ledger.TIMEZONE.localize(datetime.datetime.combine(date, datetime.time(hour, minute)))
 
 
-def no_hevy(_date):
+GYM_DAYS = {MONDAY, THURSDAY}
+
+
+def no_hevy(date):
+    """Rest-day lookups (early-session check) find nothing; gym-day lookups are too early."""
+    if date not in GYM_DAYS:
+        return 0
     raise AssertionError("Hevy should not be called yet")
 
 
@@ -259,3 +265,58 @@ def test_a_session_still_counts_on_an_unenforced_day():
     ledger.get_or_create_day(MONDAY)
     enforcer.tick(at(23, 0), fetch=lambda d: 62)
     assert gym()["status"] == "done"
+
+
+
+# ── Early sessions ───────────────────────────────────────────────────────────
+
+SUNDAY = MONDAY - datetime.timedelta(days=1)   # Rest in these tests
+
+
+def test_rest_day_session_the_night_before_counts():
+    calls = []
+
+    def hevy(date):
+        calls.append(date)
+        return 54 if date == SUNDAY else 0
+
+    assert enforcer.tick(at(6, 0), fetch=hevy) == []
+    assert enforcer.tick(at(6, 45), fetch=hevy) == ["Pull logged yesterday · 54 min. Nothing to do this morning."]
+    assert gym()["status"] == "done" and gym()["early"] is True
+    # No sequence, no repeat check, no miss at close.
+    assert enforcer.tick(at(7, 5), fetch=hevy) == []
+    assert calls == [SUNDAY]
+    assert enforcer.tick(at(23, 0), fetch=hevy) == []
+    assert debt(MONDAY)["makeup"] is None
+
+
+def test_no_early_session_runs_the_normal_sequence():
+    assert enforcer.tick(at(6, 45), fetch=no_hevy) == ["06:45 · Pull · leave by 07:05\nReply up."]
+
+
+def test_wake_triggers_the_early_check_too():
+    ledger.record_event({"type": "wake"}, now=at(6, 0))
+    out = enforcer.tick(at(6, 0), fetch=lambda d: 60 if d == SUNDAY else 0)
+    assert out == ["Pull logged yesterday · 60 min. Nothing to do this morning."]
+
+
+def test_session_that_cleared_a_makeup_is_not_counted_twice():
+    ledger.update_day(SUNDAY, lambda d: d.update(makeup_cleared=True))
+    out = enforcer.tick(at(6, 45), fetch=lambda d: (_ for _ in ()).throw(AssertionError("no hevy")))
+    assert out == ["06:45 · Pull · leave by 07:05\nReply up."]
+
+
+def test_early_check_finding_nothing_falls_back_to_the_sequence():
+    ledger.get_or_create_day(WEDNESDAY)            # Rest, nothing logged
+    out = enforcer.tick(at(6, 45, THURSDAY), fetch=lambda d: 0)
+    assert out[-1].startswith("06:45 · Upper")
+    assert gym(THURSDAY)["early_checked"] is True
+
+
+def test_no_early_credit_after_a_training_day(monkeypatch):
+    # Make Sunday a gym day: Monday then follows a training day, so no lookup.
+    monkeypatch.setattr(ledger, "_split_label", lambda d: "Push" if d == SUNDAY else
+                        {MONDAY: "Pull", THURSDAY: "Upper"}.get(d, "Rest"))
+    ledger.update_day(SUNDAY, lambda d: d.update(closed=True))  # already settled
+    out = enforcer.tick(at(6, 45), fetch=lambda d: (_ for _ in ()).throw(AssertionError("no hevy")))
+    assert out == ["06:45 · Pull · leave by 07:05\nReply up."]
