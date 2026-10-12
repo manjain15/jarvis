@@ -650,7 +650,8 @@ def update_mentor(last_topic: str, awaiting: bool = True):
 
 def mark_assessment_done(subject_code: str, assessment_name: str):
     """
-    Mark an assessment as submitted.
+    Mark an assessment as submitted. Returns the matched assessment's name,
+    or None when nothing matched (the file is left as it was).
     Usage: mark_assessment_done("COMP2511", "Assignment 1")
     """
     matched = {}
@@ -669,6 +670,7 @@ def mark_assessment_done(subject_code: str, assessment_name: str):
         print(f"✅ Marked {subject_code} — {matched['name']} as submitted")
     else:
         print("❌ Assessment not found")
+    return matched.get("name")
 
 
 def _parse_iso_date(value, field):
