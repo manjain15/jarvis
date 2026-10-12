@@ -89,6 +89,13 @@ except Exception as _e:
     print(f"⚠️  day_plan unavailable: {_e}")
     DAY_PLAN_AVAILABLE = False
 
+try:
+    import course_outlines
+    OUTLINES_AVAILABLE = True
+except Exception as _e:
+    print(f"⚠️  course_outlines unavailable: {_e}")
+    OUTLINES_AVAILABLE = False
+
 SCRIPT_DIR  = Path(__file__).parent
 DATA_DIR    = SCRIPT_DIR / "data"
 MEMORY_DIR  = SCRIPT_DIR / "memory"
@@ -551,6 +558,7 @@ def cmd_help(_args):
         "/approveall [profile|term] — apply all pending proposals\n"
         "/trust — approve/reject history per proposal category\n"
         "/done SUB \"Assessment name\" — mark submitted\n"
+        "/outlines — refresh weekly topics from the UNSW course outlines\n"
         "/internship Co key=val ... — update internship\n"
         "/mentor \"topic\" [true|false] — log mentor touchpoint\n"
         "/log <text> — append a note to episodic memory\n"
@@ -939,6 +947,15 @@ def cmd_status(_args):
     return "\n".join(lines)
 
 
+def cmd_outlines(_args):
+    """Fetch this term's UNSW course outlines now (also runs every Sunday)."""
+    try:
+        import course_outlines
+        return "Course outlines:\n" + "\n".join(course_outlines.refresh(force=True))
+    except Exception as e:
+        return f"⚠️ Outline refresh failed: {e}"
+
+
 COMMANDS = {
     "/help":       cmd_help,
     "/start":      cmd_help,
@@ -951,6 +968,7 @@ COMMANDS = {
     "/approveall": cmd_approveall,
     "/trust":      cmd_trust,
     "/done":       cmd_done,
+    "/outlines":   cmd_outlines,
     "/internship": cmd_internship,
     "/mentor":     cmd_mentor,
     "/draftmentor": cmd_draftmentor,
@@ -1096,6 +1114,8 @@ def _enforcer_call(fn, *args):
 def run_enforcer_tick():
     """Advance the day plan, gym sequence, step pace and block checks; send what they return."""
     messages = []
+    if OUTLINES_AVAILABLE:
+        _enforcer_call(course_outlines.refresh_tick, datetime.datetime.now(TIMEZONE))  # Sundays
     if DAY_PLAN_AVAILABLE:
         _enforcer_call(day_plan.tick)  # 05:30 build. Must run before the 06:00 gym start.
     if ENFORCER_AVAILABLE:

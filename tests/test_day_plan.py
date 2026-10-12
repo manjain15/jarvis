@@ -306,3 +306,67 @@ def test_fit_cap_never_exceeds_the_cap():
     assert day_plan.fit_cap(blocks, 210) == [("A", "lecture", 60), ("B", "lecture", 60), ("A", "study", 90)]
     assert day_plan.fit_cap(blocks, 200) == [("A", "lecture", 60), ("B", "lecture", 60), ("A", "study", 60)]
     assert day_plan.fit_cap(blocks, 0) == []
+
+
+# ── Weekly checks ────────────────────────────────────────────────────────────
+
+THURSDAY = MONDAY + datetime.timedelta(days=3)
+CHECKS = [
+    {"id": "scif1000-pre", "label": "SCIF1000 pre-class activities", "day": "Thursday",
+     "ask": "11:00", "followup": "12:45", "requires_class": "SCIF1000"},
+    {"id": "scif1000-post", "label": "SCIF1000 post-class activities", "day": "Thursday",
+     "ask": "19:30", "followup": "20:45", "requires_class": "SCIF1000"},
+]
+
+
+def _thursday_checks(monkeypatch, has_class=True):
+    monkeypatch.setattr(day_plan, "load_study_plan", lambda: dict(PLAN, weekly_checks=CHECKS))
+    day_plan.build_plan(now=at(5, 30, THURSDAY), busy_fn=lambda: [], tasks_fn=plain,
+                        calendar=FakeCalendar(), class_fn=lambda d, c: has_class)
+
+
+def _checks():
+    return [i for i in ledger.load_day(THURSDAY)["items"] if i.get("kind") == "check"]
+
+
+def test_checks_only_on_their_day_and_with_a_class(monkeypatch):
+    plan = dict(PLAN, weekly_checks=CHECKS)
+    assert day_plan.weekly_check_items(plan, TUESDAY, class_fn=lambda d, c: True) == []
+    assert len(day_plan.weekly_check_items(plan, THURSDAY, class_fn=lambda d, c: True)) == 2
+    assert day_plan.weekly_check_items(plan, THURSDAY, class_fn=lambda d, c: False) == []
+
+
+def test_check_done_first_time(monkeypatch):
+    _thursday_checks(monkeypatch)
+    # Study blocks end earlier; answer those so the check is next in line.
+    for item in ledger.load_day(THURSDAY)["items"]:
+        if item.get("kind") == "study":
+            ledger.update_day(THURSDAY, lambda d, i=item["id"]: [x.update(status="done") for x in d["items"] if x.get("id") == i])
+    assert day_plan.check_tick(at(11, 0, THURSDAY)) == ["SCIF1000 pre-class activities. Done? done / no"]
+    assert day_plan.handle_reply("done", now=at(11, 2, THURSDAY)) == "Logged."
+    assert day_plan.check_tick(at(12, 45, THURSDAY)) == []
+    assert _checks()[0]["status"] == "done"
+
+
+def test_check_no_gets_one_followup(monkeypatch):
+    _thursday_checks(monkeypatch)
+    ledger.update_day(THURSDAY, lambda d: [x.update(status="done") for x in d["items"] if x.get("kind") == "study"])
+    day_plan.check_tick(at(11, 0, THURSDAY))
+    assert day_plan.handle_reply("no", now=at(11, 1, THURSDAY)) == "Asking again at 12:45."
+    assert day_plan.check_tick(at(12, 0, THURSDAY)) == []
+    assert day_plan.check_tick(at(12, 45, THURSDAY)) == ["Still open: SCIF1000 pre-class activities. Done? done / no"]
+    assert day_plan.handle_reply("partial", now=at(12, 50, THURSDAY)) == "Logged as not done."
+    assert day_plan.check_tick(at(14, 0, THURSDAY)) == []
+
+
+def test_unanswered_check_still_gets_its_followup(monkeypatch):
+    _thursday_checks(monkeypatch)
+    ledger.update_day(THURSDAY, lambda d: [x.update(status="done") for x in d["items"] if x.get("kind") == "study"])
+    day_plan.check_tick(at(19, 30, THURSDAY))
+    assert day_plan.check_tick(at(20, 45, THURSDAY)) == ["Still open: SCIF1000 post-class activities. Done? done / no"]
+
+
+def test_replan_keeps_one_set_of_checks(monkeypatch):
+    _thursday_checks(monkeypatch)
+    _thursday_checks(monkeypatch)
+    assert [c["id"] for c in _checks()] == ["scif1000-pre", "scif1000-post"]

@@ -11,6 +11,7 @@ def _seed(tmp_path, monkeypatch, *courses):
     for c in courses:
         (cdir / f"{c['code'].lower()}.json").write_text(json.dumps(c))
     monkeypatch.setattr(cs, "COURSES_DIR", cdir)
+    monkeypatch.setattr(cs, "OUTLINES_DIR", tmp_path / "no-outlines")
 
 
 _COMP = {"code": "COMP2511", "name": "SD&A",
@@ -60,3 +61,26 @@ def test_current_week_summary_renders(tmp_path, monkeypatch):
     monkeypatch.setattr(cs, "_current_week", lambda: 5)
     out = cs.get_current_week_summary()
     assert "Week 5" in out and "Patterns" in out and "COMP2511" in out
+
+
+def test_outline_weeks_fill_in_and_manual_weeks_win(tmp_path, monkeypatch):
+    _seed(tmp_path, monkeypatch, {
+        "code": "MATH2931", "name": "HLM", "lectures": None,
+        "schedule": [{"week": 4, "topics": ["Hand-written W4"], "assessments": ["ICT due Wed 7 Oct"]},
+                     {"week": 5, "topics": [], "assessments": []}]})
+    odir = tmp_path / "outlines"
+    odir.mkdir()
+    (odir / "math2931.json").write_text(json.dumps({
+        "code": "MATH2931", "name": "Higher Linear Models",
+        "schedule": [{"week": 4, "topics": ["PRESS, GCV"], "activities": [], "assessments": ["In-class Test (20%)"]},
+                     {"week": 5, "topics": ["Categorical Features"], "activities": ["Tutorial: W5"], "assessments": []}]}))
+    (odir / "_state.json").write_text("{}")
+    monkeypatch.setattr(cs, "OUTLINES_DIR", odir)
+
+    w4 = cs.get_week_topics(4, course="MATH2931")[0]
+    assert w4["topics"] == ["Hand-written W4"]
+    assert w4["assessments"] == ["In-class Test (20%)", "ICT due Wed 7 Oct"]
+    w5 = cs.get_week_topics(5, course="MATH2931")[0]
+    assert w5["topics"] == ["Categorical Features"]
+    assert w5["activities"] == ["Tutorial: W5"]
+    assert w5["name"] == "HLM"
