@@ -550,7 +550,8 @@ def test_replan_keeps_done_blocks_and_replaces_only_future_events():
     first = day_plan.build_plan(now=at(5, 30), busy_fn=lambda: [], tasks_fn=plain, calendar=cal)
     done_id = first[0]["id"]
     ledger.update_day(TUESDAY, lambda d: ledger.find_item(d, done_id).update(status="done"))
-    future_events = [i["event_id"] for i in first if datetime.datetime.fromisoformat(i["start"]) > at(9, 44)]
+    # Everything not answered is replaced, including blocks whose time has started.
+    future_events = [i["event_id"] for i in first if i["id"] != done_id]
 
     day_plan.set_override(TUESDAY, {"add": [{"start": "09:30", "end": "17:30", "label": "Automation work"}]})
     cal2 = FakeCalendar()
@@ -564,3 +565,18 @@ def test_replan_keeps_done_blocks_and_replaces_only_future_events():
     assert len({i["id"] for i in stored}) == len(stored)
     kept_minutes = sum(i["minutes"] for i in stored if i["kind"] == "study")
     assert kept_minutes <= 240
+
+
+
+def test_replan_drops_a_started_but_unanswered_block():
+    cal = FakeCalendar()
+    day_plan.build_plan(now=at(5, 30), busy_fn=lambda: [], tasks_fn=plain, calendar=cal)
+    first = sorted([i for i in ledger.load_day(TUESDAY)["items"] if i.get("kind") == "study"],
+                   key=lambda i: i["start"])[0]
+    # 10:18, the first block started at 08:20 and was never asked about.
+    day_plan.set_override(TUESDAY, {"add": [{"start": "09:30", "end": "17:30", "label": "Automation work"}]})
+    cal2 = FakeCalendar()
+    day_plan.replan_today(now=at(10, 18), busy_fn=lambda: [], tasks_fn=plain, calendar=cal2)
+    assert ledger.find_item(ledger.load_day(TUESDAY), first["id"]) is None or \
+        ledger.find_item(ledger.load_day(TUESDAY), first["id"])["start"] >= "2026-10-13T17:45"
+    assert first["event_id"] in cal2.deleted

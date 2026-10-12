@@ -706,11 +706,14 @@ def _title(course, kind):
 
 
 def _kept(item, now):
-    """In a re-plan, keep blocks that have started, ended, or been asked or answered."""
+    """
+    In a re-plan, keep blocks that have been answered or asked about. A block
+    still pending and never asked is replaced, even if its time has started:
+    the schedule change that triggered the re-plan may be why it can't happen.
+    """
     if item.get("kind") not in ("study", "area"):
         return False
-    return (item.get("status") != "pending" or item.get("asked_at")
-            or datetime.datetime.fromisoformat(item["start"]) <= now)
+    return item.get("status") != "pending" or bool(item.get("asked_at"))
 
 
 def build_plan(now=None, dry_run=False, busy_fn=None, tasks_fn=None, calendar=None, class_fn=None,
@@ -723,8 +726,8 @@ def build_plan(now=None, dry_run=False, busy_fn=None, tasks_fn=None, calendar=No
     class_fn(date, code) says whether the timetable has that class (weekly checks).
     area_fn(date) picks the area for the area block (default: areas.most_neglected).
     lectures_fn(code, start, end) lists timetable lectures (default: uni_timetable).
-    replan=True rebuilds only the rest of today: blocks that have started or
-    been answered stay, and only Jarvis's future events are replaced.
+    replan=True rebuilds only the rest of today: answered or asked blocks
+    stay; everything else, and its calendar event, is replaced.
     """
     import enforcer
     now = now or ledger.now_local()
