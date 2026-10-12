@@ -35,8 +35,9 @@ DEBT (settled when the day closes, 23:00):
   partial   >= 25 min. No new debt.
   unenforced  the sequence never ran that day (before go-live, daemon down).
             No debt.
-  missed    owes a make-up: the session + 10 min, within 2 days, as an extra
-            workout (a rest-day session, or minutes beyond that day's target).
+  missed    owes a make-up: base minutes + 10 (55 when the base is 45), within
+            2 days, as an extra workout (a rest-day session, or minutes beyond
+            that day's target). The make-up is taken from base_minutes.
   make-up not done by its due date: +20 min on the next gym session, which
             stays until a session hits the longer target.
   steps     the shortfall against the day's target becomes tomorrow's step

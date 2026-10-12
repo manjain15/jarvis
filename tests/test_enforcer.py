@@ -121,7 +121,32 @@ def test_verification_after_slot_plus_two_hours_is_throttled():
 
 def test_partial_session():
     enforcer.tick(at(6, 45), fetch=no_hevy)
-    assert enforcer.tick(at(9, 15), fetch=lambda d: 30) == ["Logged · Pull · 30 min. Partial."]
+    # Done line for a 45-min target is 30 (target − 15). 27 is still partial.
+    assert enforcer.tick(at(9, 15), fetch=lambda d: 27) == ["Logged · Pull · 27 min. Partial."]
+    assert gym()["status"] == "partial"
+
+
+def test_typical_session_meets_the_45_minute_target():
+    enforcer.tick(at(6, 45), fetch=no_hevy)
+    assert gym()["base_minutes"] == 45
+    assert gym()["minutes"] == 45
+    assert enforcer.tick(at(9, 15), fetch=lambda d: 38) == ["Logged · Pull · 38 min."]
+    assert gym()["status"] == "done"
+
+
+def test_stored_60_minute_target_stays_partial_at_38():
+    """A day already planned at 60 is graded against that stored target."""
+    ledger.get_or_create_day(MONDAY)
+
+    def _set(day):
+        item = ledger.find_item(day, "gym")
+        item["base_minutes"] = 60
+        item["minutes"] = 60
+
+    ledger.update_day(MONDAY, _set)
+    enforcer.tick(at(6, 45), fetch=no_hevy)
+    assert enforcer.tick(at(9, 15), fetch=lambda d: 38) == ["Logged · Pull · 38 min. Partial."]
+    assert gym()["minutes"] == 60
     assert gym()["status"] == "partial"
 
 
@@ -197,13 +222,13 @@ def test_unknown_sleep_and_calendar_reject():
 
 def test_miss_creates_a_makeup_cleared_by_a_rest_day_session():
     _started()
-    assert enforcer.tick(at(23, 0), fetch=lambda d: 0) == ["Pull missed. Make-up: 70 min by Wed."]
+    assert enforcer.tick(at(23, 0), fetch=lambda d: 0) == ["Pull missed. Make-up: 55 min by Wed."]
     assert gym()["status"] == "missed"
-    assert debt(MONDAY)["makeup"]["minutes"] == 70
+    assert debt(MONDAY)["makeup"]["minutes"] == 55
 
-    # Tuesday carries it. A 60-min rest-day session clears it (70 − 15 slack).
+    # Tuesday carries it. A 45-min rest-day session clears it (55 − 15 slack).
     ledger.get_or_create_day(TUESDAY)
-    assert enforcer.tick(at(23, 0, TUESDAY), fetch=lambda d: 60) == ["Make-up done · 60 min. Cleared."]
+    assert enforcer.tick(at(23, 0, TUESDAY), fetch=lambda d: 45) == ["Make-up done · 45 min. Cleared."]
     assert debt(TUESDAY)["makeup"] is None
 
 
@@ -217,11 +242,12 @@ def test_expired_makeup_adds_minutes_to_the_next_session():
         "Make-up not done. +20 min on the next session until it's hit."]
 
     thursday = ledger.get_or_create_day(THURSDAY)
-    assert ledger.find_item(thursday, "gym")["minutes"] == 80
-    # 70 min is within the 15-min slack of 80: done, and the debt clears.
+    assert ledger.find_item(thursday, "gym")["base_minutes"] == 45
+    assert ledger.find_item(thursday, "gym")["minutes"] == 65
+    # 55 min clears a 65-min target (done line is 50) and the debt clears.
     enforcer.tick(at(6, 45, THURSDAY), fetch=no_hevy)
-    assert enforcer.tick(at(9, 15, THURSDAY), fetch=lambda d: 70) == ["Logged · Upper · 70 min."]
-    enforcer.tick(at(23, 0, THURSDAY), fetch=lambda d: 70)
+    assert enforcer.tick(at(9, 15, THURSDAY), fetch=lambda d: 55) == ["Logged · Upper · 55 min."]
+    enforcer.tick(at(23, 0, THURSDAY), fetch=lambda d: 55)
     assert debt(THURSDAY)["gym_minutes"] == 0
 
 
@@ -239,8 +265,8 @@ def test_yesterday_closes_late_and_recarries_into_today():
     assert debt(TUESDAY)["makeup"] is None
 
     out = enforcer.tick(at(7, 1, TUESDAY), fetch=lambda d: 0)
-    assert out == ["Pull missed. Make-up: 70 min by Wed."]
-    assert debt(TUESDAY)["makeup"]["minutes"] == 70
+    assert out == ["Pull missed. Make-up: 55 min by Wed."]
+    assert debt(TUESDAY)["makeup"]["minutes"] == 55
     assert ledger.load_day(MONDAY)["closed"] is True
 
 

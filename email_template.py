@@ -14,7 +14,7 @@ caller from Jarvis's data. Sections with nothing in them are left out.
       "title":     "Monday 12 October",
       "meta":      "Week 5 · Pull day · 3 classes",
       "note":      "MATH2931 quiz is Thursday ...",          # optional
-      "owed":      [{"label": "Gym make-up · by Tue", "value": "70 min", "miss": True}],
+      "owed":      [{"label": "Gym make-up · by Tue", "value": "55 min", "miss": True}],
       "today":     [{"time": "06:30", "title": "Pull", "sub": "Leave by 06:25"}],
       "due":       [{"label": "MATH2931 Assignment 2", "value": "Wed 11 Nov · 30d"}],
       "yesterday": [{"value": "Done", "label": "Legs", "miss": False}, ...],  # up to 4

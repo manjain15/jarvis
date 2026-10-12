@@ -40,7 +40,8 @@ New module `ledger.py`. One file per day: `data/ledger/YYYY-MM-DD.json`.
       "kind": "gym",               // gym | steps | study | area
       "title": "Push",
       "slot": "06:30",
-      "minutes": 60,
+      "base_minutes": 45,          // default session; debt is added on top
+      "minutes": 45,
       "evidence": "geofence+hevy", // what counts as proof
       "status": "pending",         // pending | done | partial | missed | excused | moved
       "excuse": null,
@@ -66,7 +67,7 @@ timer, so there's no unit to install. The plan is built from:
   - `routine`: work and travel the calendar doesn't know about.
   - `daily_cap_hours`.
   - `ignore_busy`: `["Lecture"]`, because lectures are watched as recordings.
-- **Gym**: 06:30 is kept unless the calendar clashes. Otherwise the session moves to the first clear 15-min step, up to 20:00.
+- **Gym**: 45 minutes (`ledger.DEFAULT_GYM_MINUTES`). 06:30 is kept unless the calendar clashes. Otherwise the session moves to the first clear 15-min step, up to 20:00. The time held out of the day is that target plus travel both ways and 30 minutes after. Carried gym debt is added to `minutes` and leaves `base_minutes` alone.
 - **Sizing**:
   - Remaining time = weekly target + last week's lecture backlog − done (partial counts as half).
   - That's spread over the days left in proportion to each day's cap.
@@ -118,7 +119,9 @@ Telegram, on a gym day:
 - Anything else → rejected. The sequence continues.
 
 **Minimum:** on a bad day the deal is "arrive and do the first exercise". A
-session of 25+ min in Hevy counts as `partial`, not missed.
+session of 25+ min in Hevy counts as `partial`, not missed. `done` is the
+target minus 15 minutes (30 min for a 45-min session). The packed-day
+short version stays 35 min.
 
 ## 6. Steps
 
@@ -157,13 +160,13 @@ Settled when the day closes (23:00, or on the next tick if the daemon was down).
 
 | Outcome | Rule | Debt |
 |---|---|---|
-| done | Hevy minutes ≥ target − 15 | clears `gym_minutes` |
-| partial | ≥ 25 min | none |
+| done | Hevy minutes ≥ target − 15 (30 when the target is 45) | clears `gym_minutes` |
+| partial | ≥ 25 min and under the done line | none |
 | excused | `skip sick` | none, shown in the weekly review |
 | unenforced | the sequence never ran that day (before go-live, daemon down all morning) | none |
-| missed | anything else | a **make-up**: the session + 10 min within 2 days |
+| missed | anything else | a **make-up**: base minutes + 10 (55 on a normal day) within 2 days |
 
-- **Make-up**: an extra workout. Either a rest-day session, or minutes beyond that day's target. It clears when the extra minutes are ≥ make-up − 15.
+- **Make-up**: an extra workout of the base target + 10. Either a rest-day session, or minutes beyond that day's target. It clears when the extra minutes are ≥ make-up − 15.
 - **Make-up not done by its due date**: +20 min on every gym session until one hits the longer target.
 - **A second miss while a make-up is owed**: +10 min on the next session.
 - **Steps**: a shortfall carries to the next day (cap +3,000). Built in phase 3.
