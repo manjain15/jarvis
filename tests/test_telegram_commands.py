@@ -18,10 +18,25 @@ def test_smart_quotes_group_like_straight_quotes(monkeypatch):
                         lambda subject, name: seen.update(subject=subject, name=name) or "In-class Test")
     reply = jarvis_telegram.handle_command("/done MATH2931 “In-class Test”")
     assert seen == {"subject": "MATH2931", "name": "In-class Test"}
-    assert reply == "✅ Marked MATH2931 — In-class Test as submitted."
+    assert reply == "Marked MATH2931 — In-class Test as submitted."
 
 
 def test_done_reports_a_miss(monkeypatch):
     monkeypatch.setattr(term_context, "mark_assessment_done", lambda subject, name: None)
     reply = jarvis_telegram.handle_command('/done MATH2931 "Quiz 9"')
-    assert reply.startswith("⚠️ No MATH2931 assessment matching")
+    assert reply.startswith("No MATH2931 assessment matching")
+
+
+def test_replies_carry_no_emoji(monkeypatch):
+    from voice import _EMOJI
+    monkeypatch.setattr(term_context, "mark_assessment_done", lambda subject, name: "Quiz")
+    for reply in (jarvis_telegram.handle_command('/done MATH2931 "Quiz"'), jarvis_telegram.cmd_help([])):
+        assert not _EMOJI.search(reply)
+
+
+def test_send_message_drops_emoji_but_keeps_layout(monkeypatch):
+    sent = []
+    monkeypatch.setattr(jarvis_telegram.config, "TELEGRAM_CHAT_ID", 1)
+    monkeypatch.setattr(jarvis_telegram, "_api", lambda method, params: sent.append(params["text"]))
+    jarvis_telegram.send_message("🔥 Logged.\n  • 💪 Pull · 50 min\n\n✅ Done")
+    assert sent == ["Logged.\n  • Pull · 50 min\n\nDone"]
