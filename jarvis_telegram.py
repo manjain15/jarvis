@@ -895,7 +895,7 @@ def cmd_log(args):
 # Units checked by /status. Keep the always-on list in step with watchdog.ALWAYS_ON.
 STATUS_ALWAYS_ON   = ["jarvis-telegram", "jarvis-agent-api"]
 STATUS_TIMER_UNITS = [
-    "jarvis-morningbrief", "jarvis-gmail",
+    "jarvis-morningbrief",
     "jarvis-memory", "jarvis-jobsearch",
 ]
 

@@ -282,8 +282,8 @@ Each phase ships and gets tested on its own.
 4. **05:30 plan + study blocks in Calendar + block checks.**
 5. **Email redesign + `voice.py`.** Touches `morning_brief.py` and `weekly_review.py` (diff + `--test` shown).
 6. **Areas + Grok check-in routes + `docs/grok_bots.md`.** Retire the Telegram check-in.
-7. **Retire ntfy alerts.** Done: `alerts.py` and the `jarvis-alerts` timer are
-   removed. `gmail_monitor.py` still pushes action emails to ntfy.
+7. **Retire ntfy.** Done: `alerts.py`, `gmail_monitor.py` and their timers
+   are removed. Nothing pushes to ntfy any more.
 
 ## 16. Files touched
 
