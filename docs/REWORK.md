@@ -39,7 +39,7 @@ New module `ledger.py`. One file per day: `data/ledger/YYYY-MM-DD.json`.
       "id": "gym",
       "kind": "gym",               // gym | steps | study | area
       "title": "Push",
-      "slot": "07:15",
+      "slot": "06:30",
       "minutes": 60,
       "evidence": "geofence+hevy", // what counts as proof
       "status": "pending",         // pending | done | partial | missed | excused | moved
@@ -59,7 +59,7 @@ way `term_context` writes.
 
 New timer `jarvis-plan` at 05:30. It builds today's ledger from:
 
-- **Gym**: the split label (`get_pplrul_day`), with a slot picked from the calendar's first free 75 min after 06:30. Default 07:15.
+- **Gym**: the split label (`get_pplrul_day`), with a slot picked from the calendar's first free 75 min after 06:30. Default 06:30 (`JARVIS_GYM_SLOT`), 5 min travel (`JARVIS_GYM_TRAVEL_MIN`), so leave by 06:25.
 - **Steps**: 10,000 + carried step debt, capped at +3,000.
 - **Study blocks**: weighted by assessment proximity (`study_tracker`), this week's topics (`course_schedule`), weekly per-course hour targets (new, in `term_context.json`), and free calendar gaps (`uni_timetable` + Google Calendar). Written to Google Calendar as `Study · MATH2931` with a private extended property `jarvis=1`, so Jarvis can find and update its own events. No `[Jarvis]` prefix.
 - **One area push**: the most neglected area (see §8).
@@ -76,7 +76,7 @@ Telegram, on a gym day:
 
 | t | Message | Proof | If missed |
 |---|---|---|---|
-| wake | `07:04 · Push · leave by 07:20` | reply `up` within 3 min | resend + "3 min" |
+| wake | `06:00 · Push · leave by 06:25` | reply `up` within 3 min | resend + "3 min" |
 | +3 | `Clothes on.` | photo within 10 min | resend |
 | slot −0:10 | `Leave now.` | — | — |
 | slot +0:30 | — | geofence `POST /events {"type":"gym_arrive"}` | `No arrival. Reason, or go.` |

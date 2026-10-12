@@ -46,7 +46,7 @@ import re
 
 import ledger
 
-TRAVEL_MINUTES     = int(os.environ.get("JARVIS_GYM_TRAVEL_MIN", "10"))
+TRAVEL_MINUTES     = int(os.environ.get("JARVIS_GYM_TRAVEL_MIN", "5"))
 EVENING_SLOT       = os.environ.get("JARVIS_GYM_EVENING_SLOT", "18:00")
 FALLBACK_LEAD      = 30
 EVENING_LEAD       = 60

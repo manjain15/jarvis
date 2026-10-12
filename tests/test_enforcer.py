@@ -28,6 +28,7 @@ def store(tmp_path, monkeypatch):
     monkeypatch.setattr(ledger, "_split_label", lambda d: splits.get(d, "Rest"))
     monkeypatch.setattr(enforcer, "_last_close_attempt", {})
     monkeypatch.setattr(enforcer, "TRAVEL_MINUTES", 10)
+    monkeypatch.setattr(ledger, "DEFAULT_GYM_SLOT", "07:15")
     return tmp_path
 
 

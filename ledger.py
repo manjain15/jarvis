@@ -20,6 +20,7 @@ See docs/REWORK.md §3.
 
 import datetime
 import json
+import os
 from pathlib import Path
 
 import pytz
@@ -38,7 +39,7 @@ LEDGER_DIR = SCRIPT_DIR / "data" / "ledger"
 
 TIMEZONE = pytz.timezone(config.TIMEZONE)
 
-DEFAULT_GYM_SLOT = "07:15"
+DEFAULT_GYM_SLOT = os.environ.get("JARVIS_GYM_SLOT", "06:30")
 DEFAULT_GYM_MINUTES = 60
 STEP_TARGET = 10_000
 STEP_DEBT_CAP = 3_000
