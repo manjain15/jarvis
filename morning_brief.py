@@ -108,7 +108,7 @@ except Exception:
 
 # ── Calendar & task management (optional) ────────────────────────────────────
 try:
-    from jarvis_calendar import get_tasks_summary, generate_daily_plan
+    from jarvis_calendar import get_tasks_summary
     CALENDAR_WRITE = True
 except Exception:
     CALENDAR_WRITE = False
@@ -156,6 +156,17 @@ try:
     STUDY_TRACKER_AVAILABLE = True
 except Exception:
     STUDY_TRACKER_AVAILABLE = False
+
+# ── Daily ledger: today's commitments, debt, yesterday's evidence (optional) ──
+try:
+    import ledger
+    LEDGER_AVAILABLE = True
+except Exception:
+    LEDGER_AVAILABLE = False
+
+# ── Voice + email template (pure Python, no network) ─────────────────────────
+from voice import VOICE_RULES, strip_emoji
+from email_template import render_brief
 
 # Google OAuth scopes — these are the exact permissions we request
 # Gmail: read emails + send the brief back to you
@@ -382,9 +393,9 @@ def fetch_emails(creds, hours_back=18, max_emails=15):
 #   - Your recent emails
 #   - Exact instructions for how to write the brief
 
-# Do not raise this. A brief that needs more tokens is too long; cap the
-# prompt and salvage a truncated reply instead.
-BRIEF_MAX_TOKENS = 2500
+# Claude writes only the note and the one push (JSON); everything else in the
+# email is rendered from data. A short cap keeps it from drifting into a brief.
+NOTE_MAX_TOKENS = 400
 
 # Input pasted into the prompt. The model echoes what it is given, and the
 # finance block is kept long enough that the savings lines are not the part
@@ -408,13 +419,6 @@ PROMPT_SECTION_CAPS = {
     "flags": 700,
     "followup": 400,
 }
-
-_SHORT_BRIEF_SUFFIX = (
-    "\n\nThe previous reply was cut off. Rewrite the COMPLETE brief in under "
-    "280 words. At most 2 sentences per section. Omit profile updates. "
-    "End with the mindset sentence. Finished HTML only."
-)
-
 
 def cap_section(text, limit):
     """
@@ -598,9 +602,7 @@ def build_prompt(profile_text, events, emails, today_str, checkin_summary=None, 
     flags_section = cap_section(flags_section, PROMPT_SECTION_CAPS["flags"])
     followup_section = cap_section(followup_section, PROMPT_SECTION_CAPS["followup"])
 
-    prompt = f"""You are Jarvis — a highly intelligent personal assistant who knows this person deeply.
-You speak directly, concisely, and with genuine intelligence. No fluff. No filler.
-You push them toward their goals. You're the voice in their ear that keeps them sharp.
+    prompt = f"""{VOICE_RULES}
 
 Today is {today_str} (Sydney time).
 
@@ -689,52 +691,24 @@ MENTOR FOLLOW-UP DRAFT:
 {followup_section}
 
 ────────────────────────────
-YOUR TASK — write their morning briefing:
+YOUR TASK
 ────────────────────────────
+The email around your text is built from the data above: today's timeline, what is
+owed, deadlines and yesterday's numbers. Do not repeat those lists. Write two things.
 
-Write a sharp morning briefing in clean HTML for email.
-Return ONLY raw HTML. No markdown, no code fences. Start with the h2.
+"note": at most 2 sentences. The one thing about today the lists don't make obvious:
+a deadline colliding with missed study, an email that needs action today, a stale
+internship or mentor flag, spending off track (budget ~${_fin_goals['weekly_budget']:.0f}/week, savings
+${_fin_goals['savings_goal']:,.0f} by {_fin_deadline_str}). If nothing stands out, one sentence on today's main study goal.
 
-Hard limits — a cut-off brief is a failed brief:
-- Under 320 words total.
-- At most 2 sentences per section, or 4 short bullets for schedule and email.
-- Use only numbers and facts from the sections above. Do not invent drafts, balances, or emails.
-- Omit a section that has nothing to say (mentor, and profile updates, in particular).
+"push": 1 sentence. One concrete step for career, networking, portfolio or the passion
+project that fits today. If a mentor draft is waiting in Gmail, name its subject.
+Rotate areas across days; use memory to avoid repeating recent pushes.
 
-<h2>Good morning. Here's your day.</h2>
+The note and the push must be about different things. If the push covers the mentor
+draft, the note covers something else.
 
-<h3>📅 Today's schedule</h3>
-At most 4 bullets. If the day is empty, one sentence.
-
-<h3>📬 Email triage</h3>
-At most 4 lines. One line each: who, what, and whether it needs action today. If nothing urgent, one sentence.
-
-<h3>🎯 Your #1 priority today</h3>
-One specific action, two sentences max. Rotate internship search, health, and the passion project across days.
-
-<h3>📚 Uni check</h3>
-Term and week. The single most urgent assessment inside 7 days (subject, name, days left, weight), or say nothing is due. Two sentences.
-
-<h3>💼 Internship pulse</h3>
-Name any stale or OA-waiting company from the flags, then one concrete action. Two sentences.
-
-<h3>🤝 Mentor</h3>
-One or two sentences. If a Gmail draft is waiting, give its subject and say it is in Drafts. Do not invent a draft. Omit the section if there is nothing to do.
-
-<h3>💪 Health check</h3>
-Sleep versus a 7–8h target, whether they trained, today's split, and one stalling lift if any. Two sentences.
-
-<h3>💰 Finance flag</h3>
-Weekly spend versus the ~${_fin_goals['weekly_budget']:.0f}/week budget (~${_fin_goals['monthly_budget']:.0f}/month), savings versus ${_fin_goals['savings_goal']:,.0f} by {_fin_deadline_str}, and reselling net if the data has it. Two sentences. On Sunday, one extra sentence: export the St. George CSVs (everyday, savings, investing) into jarvis/finance/ and run deploy/sync-finance-up.sh.
-
-<h3>🔄 Profile & term updates</h3>
-Only if proposals are pending. One line each, plus the command: python update_profile.py for profile, python term_updates.py for term context. If there are no proposals, omit this section entirely.
-
-<h3>⚡ Today's mindset</h3>
-One sentence, specific to this week, then stop.
-
-Under 320 words. No corporate speak. No "Great news!" or "Here's a summary of...".
-Just start. Be Jarvis."""
+Under 80 words in total. Return only JSON: {{"note": "...", "push": "..."}}"""
 
     return prompt
 
@@ -743,83 +717,34 @@ Just start. Be Jarvis."""
 # STEP 5 — CALL CLAUDE
 # ─────────────────────────────────────────────────────────────────────────────
 
-def salvage_truncated_html(html):
+def parse_note(text):
     """
-    Turn a max_tokens cutoff into HTML that still closes.
-
-    Drops a trailing unfinished tag, trims a cut-off word, closes tags the
-    brief opened, and appends one sentence so the email is not left mid-tag.
+    {"note", "push"} from Claude's reply. Anything unparseable gives empty
+    strings, and the brief goes out without those two lines.
     """
-    text = (html or "").strip()
-    last_lt = text.rfind("<")
-    last_gt = text.rfind(">")
-    if last_lt > last_gt:
-        text = text[:last_lt].rstrip()
-    if text and text[-1].isalnum():
-        boundary = max(text.rfind(". "), text.rfind("! "), text.rfind("? "), text.rfind("\n"))
-        if boundary > len(text) * 0.5:
-            text = text[:boundary + 1].rstrip()
-        else:
-            space = text.rfind(" ")
-            if space > 0:
-                text = text[:space].rstrip()
-
-    tag_re = re.compile(r"</?([a-zA-Z][a-zA-Z0-9]*)\b[^>]*?/?>", re.DOTALL)
-    stack = []
-    void = {"br", "hr", "img", "meta", "link"}
-    for match in tag_re.finditer(text):
-        raw = match.group(0)
-        name = match.group(1).lower()
-        if raw.startswith("</"):
-            if name in stack:
-                while stack and stack[-1] != name:
-                    stack.pop()
-                if stack and stack[-1] == name:
-                    stack.pop()
-            continue
-        if raw.endswith("/>") or name in void:
-            continue
-        stack.append(name)
-
-    closers = "".join(f"</{name}>" for name in reversed(stack))
-    note = "<p><em>Brief shortened to fit. Sections above stop at the cutoff.</em></p>"
-    return (text + closers + note).strip()
+    try:
+        raw = text[text.index("{"):text.rindex("}") + 1]
+        data = json.loads(raw)
+    except Exception:
+        return {"note": "", "push": ""}
+    return {key: strip_emoji(str(data.get(key) or ""))[:400] for key in ("note", "push")}
 
 
-def generate_brief(prompt):
+def generate_note(prompt):
     """
-    Send the prompt to Claude and return the HTML brief.
-
-    Retries overload (529) up to 5 times. If stop_reason is max_tokens, retries
-    once with a shorter instruction. A second cutoff is closed with
-    salvage_truncated_html instead of raising max_tokens. If that retry raises
-    for any other reason, the first truncated body is salvaged and returned
-    so a brief still goes out. Does not send email.
+    Ask Claude for the note and the one push. Retries overload (529) up to 5
+    times. Any other failure returns empty strings so the brief still sends.
     """
     import time
     client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
-    prompt_in_use = prompt
-    retried_short = False
-    first_truncated = None
-
     for attempt in range(5):
         try:
             message = client.messages.create(
                 model="claude-sonnet-4-6",
-                max_tokens=BRIEF_MAX_TOKENS,
-                messages=[{"role": "user", "content": prompt_in_use}],
+                max_tokens=NOTE_MAX_TOKENS,
+                messages=[{"role": "user", "content": prompt}],
             )
-            body = message.content[0].text if message.content else ""
-            if message.stop_reason == "max_tokens" and not retried_short and attempt < 4:
-                print("    ⚠️  Brief hit max_tokens — retrying once, shorter")
-                retried_short = True
-                first_truncated = body
-                prompt_in_use = prompt + _SHORT_BRIEF_SUFFIX
-                continue
-            if message.stop_reason == "max_tokens":
-                print("    ⚠️  Brief still truncated — sending a closed fallback")
-                return salvage_truncated_html(body)
-            return body
+            return parse_note(message.content[0].text if message.content else "")
         except Exception as e:
             overloaded = (
                 isinstance(e, anthropic.APIStatusError)
@@ -831,94 +756,276 @@ def generate_brief(prompt):
                 print(f"    ⚠️  Claude overloaded, retrying in {wait}s (attempt {attempt + 1}/5)...")
                 time.sleep(wait)
                 continue
-            if first_truncated is not None:
-                print("    ⚠️  Brief retry failed — sending the earlier truncated reply")
-                return salvage_truncated_html(first_truncated)
-            raise
-    if first_truncated is not None:
-        return salvage_truncated_html(first_truncated)
-    raise RuntimeError("brief generation failed")
+            print(f"    ⚠️  Note generation failed: {e} — sending the brief without it")
+            return {"note": "", "push": ""}
+    return {"note": "", "push": ""}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STEP 5b — BUILD THE EMAIL FROM DATA
+# ─────────────────────────────────────────────────────────────────────────────
+# Every number in the email comes from here, not from Claude. Each builder is a
+# pure function over plain data so it can be tested without Google.
+
+def _hm(dt):
+    return dt.strftime("%H:%M")
+
+
+def today_rows(day, calendar_items, classes, travel_minutes=5):
+    """
+    The Today timeline: gym, study blocks, weekly checks, calendar events and
+    classes, in time order. calendar_items and classes are dicts with start
+    (datetime or None for all-day), title and location. Jarvis's own study
+    events must already be left out of calendar_items (the ledger has them).
+    """
+    rows = []
+    for item in (day or {}).get("items", []):
+        kind = item.get("kind")
+        if kind == "gym":
+            slot = datetime.datetime.strptime(item["slot"], "%H:%M")
+            leave = (slot - datetime.timedelta(minutes=travel_minutes)).strftime("%H:%M")
+            status = item.get("status")
+            if status in ("done", "partial"):
+                sub = f"Logged · {item.get('logged_minutes', item['minutes'])} min"
+            elif status == "excused":
+                sub = "Excused"
+            elif status == "missed":
+                sub = "Missed"
+            else:
+                sub = f"Leave by {leave}"
+                if item.get("minutes") != item.get("base_minutes", item.get("minutes")):
+                    sub += f" · {item['minutes']} min with debt"
+                if item.get("moved_from"):
+                    sub += f" · moved from {item['moved_from']}"
+            rows.append((item["slot"], item["title"], sub, status == "missed"))
+        elif kind == "study":
+            start = datetime.datetime.fromisoformat(item["start"])
+            rows.append((_hm(start), item["title"], f"{item['task']} · {item['minutes']} min", False))
+        elif kind == "check":
+            ask = datetime.datetime.fromisoformat(item["ask_at"])
+            rows.append((_hm(ask), item["label"], "Quick check", False))
+    for e in list(calendar_items) + list(classes):
+        start = e.get("start")
+        rows.append(("All day" if start is None else _hm(start), e["title"], e.get("location") or None, False))
+    rows.sort(key=lambda r: "" if r[0] == "All day" else r[0])
+    return [{"time": t, "title": title, "sub": sub, "miss": miss} for t, title, sub, miss in rows]
+
+
+def owed_rows(day, today):
+    """The Owed section from the ledger's carried debt."""
+    debt = (day or {}).get("debt") or {}
+    rows = []
+    makeup = debt.get("makeup")
+    if makeup:
+        due = datetime.date.fromisoformat(makeup["due"])
+        rows.append({"label": f"Gym make-up · {makeup['split']} · by {due:%a}",
+                     "value": f"{makeup['minutes']} min", "miss": due <= today + datetime.timedelta(days=1)})
+    if debt.get("gym_minutes"):
+        rows.append({"label": "Extra on every session until hit",
+                     "value": f"+{debt['gym_minutes']} min", "miss": True})
+    if debt.get("steps"):
+        rows.append({"label": "Steps carried from yesterday", "value": f"+{debt['steps']:,}", "miss": False})
+    return rows
+
+
+def due_rows(upcoming, limit=4):
+    """Due soon: the next few assessments, with days left. Within 3 days is red."""
+    rows = []
+    for a in upcoming[:limit]:
+        due = datetime.date.fromisoformat(a["due"])
+        days = a["days_left"]
+        when = "today" if days == 0 else "tomorrow" if days == 1 else f"{days}d"
+        weight = f" ({a['weight']}%)" if a.get("weight") else ""
+        rows.append({"label": f"{a['subject']} {a['name']}{weight}",
+                     "value": f"{due:%a %-d %b} · {when}", "miss": days <= 3})
+    return rows
+
+
+def yesterday_stats(prev_day, sleep_hours=None, health_steps=None, weight=None, weight_delta=None):
+    """The four Yesterday cells: gym, steps, sleep, weight."""
+    gym = ledger.find_item(prev_day, "gym") if (LEDGER_AVAILABLE and prev_day) else None
+    if gym is None:
+        gym_cell = {"value": "Rest", "label": "Gym", "miss": False}
+    else:
+        value = {"done": "Done", "partial": "Partial", "missed": "Missed",
+                 "excused": "Excused"}.get(gym.get("status"), "—")
+        gym_cell = {"value": value, "label": gym["title"], "miss": gym.get("status") == "missed"}
+
+    steps_item = ledger.find_item(prev_day, "steps") if (LEDGER_AVAILABLE and prev_day) else None
+    count = steps_item["count"] if steps_item and steps_item.get("count") else health_steps
+    target = steps_item["target"] if steps_item else 10_000
+    steps_cell = {"value": f"{count:,}" if count else "—", "label": "Steps",
+                  "miss": bool(count) and count < target}
+
+    sleep_cell = {"value": f"{sleep_hours:.1f}h" if sleep_hours else "—", "label": "Sleep",
+                  "miss": bool(sleep_hours) and sleep_hours < 6}
+
+    if weight:
+        label = "kg" + (f" · {weight_delta:+.1f} wk" if weight_delta is not None else "")
+        weight_cell = {"value": f"{weight:g}", "label": label, "miss": False}
+    else:
+        weight_cell = {"value": "—", "label": "Weight", "miss": False}
+    return [gym_cell, steps_cell, sleep_cell, weight_cell]
+
+
+def meta_line(week, split, class_count):
+    """'Week 5 · Pull day · 2 classes'."""
+    parts = []
+    if week:
+        parts.append(f"Week {week}")
+    parts.append("Rest day" if split in (None, "Rest") else f"{split} day")
+    if class_count:
+        parts.append(f"{class_count} class{'es' if class_count != 1 else ''}")
+    return " · ".join(parts)
+
+
+def _ignore_words():
+    try:
+        from term_context import get_study_plan
+        return [w.lower() for w in get_study_plan().get("ignore_busy", [])]
+    except Exception:
+        return []
+
+
+def _calendar_items(creds, now):
+    """Today's calendar events (not Jarvis's own blocks) as dicts with datetimes."""
+    service = build("calendar", "v3", credentials=creds)
+    start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    end = now.replace(hour=23, minute=59, second=59, microsecond=0)
+    result = service.events().list(calendarId="primary", timeMin=start.isoformat(),
+                                   timeMax=end.isoformat(), singleEvents=True,
+                                   orderBy="startTime", maxResults=30).execute()
+    ignore = _ignore_words()
+    items = []
+    for e in result.get("items", []):
+        if e.get("extendedProperties", {}).get("private", {}).get("jarvis"):
+            continue
+        title = e.get("summary", "Untitled event")
+        if any(w in title.lower() for w in ignore):
+            continue
+        raw = e.get("start", {}).get("dateTime")
+        items.append({"start": datetime.datetime.fromisoformat(raw).astimezone(now.tzinfo) if raw else None,
+                      "title": title, "location": e.get("location", "")})
+    return items
+
+
+def _classes_today():
+    """Today's timetable classes that Manav attends (ignore_busy titles left out)."""
+    if not TIMETABLE_AVAILABLE:
+        return []
+    ignore = _ignore_words()
+    try:
+        return [{"start": c["start"], "title": c["title"], "location": c.get("location", "")}
+                for c in uni_timetable.get_today_events()
+                if c["time"] != "All day" and not any(w in c["title"].lower() for w in ignore)]
+    except Exception:
+        return []
+
+
+def _health_yesterday(today_day, yesterday):
+    """(sleep hours last night, Google Health steps yesterday). Either may be None."""
+    sleep = (today_day or {}).get("sleep_hours")
+    steps = None
+    try:
+        from google_health import fetch_sleep, fetch_steps, get_access_token
+        token = get_access_token()
+        if sleep is None:
+            data = fetch_sleep(token, yesterday)
+            if data and data.get("total_minutes"):
+                sleep = data["total_minutes"] / 60
+        data = fetch_steps(token, yesterday)
+        steps = data["steps"] if data else None
+    except Exception as e:
+        print(f"⚠️   Google Health unavailable for the brief: {e}")
+    return sleep, steps
+
+
+def _weight(yesterday):
+    """(weight from yesterday's check-in, change versus 7 days earlier)."""
+    def read(date):
+        try:
+            return json.loads((DATA_DIR / f"checkin_{date.isoformat()}.json").read_text()).get("weight_today")
+        except Exception:
+            return None
+    now_w = read(yesterday)
+    then_w = read(yesterday - datetime.timedelta(days=7))
+    delta = round(now_w - then_w, 1) if now_w and then_w else None
+    return now_w, delta
+
+
+def plan_text(day):
+    """Today's ledger plan as prompt text, so the note can refer to it."""
+    lines = []
+    for r in today_rows(day, [], []):
+        lines.append(f"  • {r['time']} {r['title']}" + (f" — {r['sub']}" if r["sub"] else ""))
+    return "\n".join(lines) or "  No plan built today."
+
+
+def collect_brief_data(creds, now, note):
+    """The render_brief data dict for today."""
+    today = now.date()
+    yesterday = today - datetime.timedelta(days=1)
+    day = prev = None
+    if LEDGER_AVAILABLE:
+        try:
+            day = ledger.get_or_create_day(today)
+            prev = ledger.load_day(yesterday)
+        except Exception as e:
+            print(f"⚠️   Ledger unavailable for the brief: {e}")
+
+    try:
+        calendar_items = _calendar_items(creds, now)
+    except Exception as e:
+        print(f"⚠️   Calendar unavailable for the brief: {e}")
+        calendar_items = []
+    classes = _classes_today()
+
+    upcoming, week = [], None
+    if TERM_CONTEXT_AVAILABLE:
+        try:
+            import term_context
+            ctx = term_context.load_context()
+            upcoming = term_context.get_upcoming_assessments(ctx, days_ahead=14)
+            week = term_context.current_term_week(ctx)
+        except Exception:
+            pass
+
+    sleep, health_steps = _health_yesterday(day, yesterday)
+    weight, delta = _weight(yesterday)
+    try:
+        import enforcer
+        travel = enforcer.TRAVEL_MINUTES
+    except Exception:
+        travel = 5
+
+    return {
+        "title": now.strftime("%A %-d %B"),
+        "meta": meta_line(week, (day or {}).get("split"), len(classes)),
+        "note": note.get("note"),
+        "owed": owed_rows(day, today),
+        "today": today_rows(day, calendar_items, classes, travel),
+        "due": due_rows(upcoming),
+        "yesterday": yesterday_stats(prev, sleep, health_steps, weight, delta),
+        "push": note.get("push"),
+        "footer": f"jarvis · {now:%H:%M}",
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # STEP 6 — SEND THE BRIEF VIA EMAIL
 # ─────────────────────────────────────────────────────────────────────────────
 
-def send_email(creds, brief_html, today_str):
-    """
-    Sends the Jarvis brief to your email address via Gmail API.
-    The brief is HTML — renders nicely in any email client.
-    """
+def send_email(creds, html_body, text_body, subject):
+    """Send the rendered brief (HTML + plain-text parts) to config.YOUR_EMAIL via the Gmail API."""
     service = build("gmail", "v1", credentials=creds)
-
-    # Wrap the brief HTML in a clean email template
-    full_html = f"""
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8">
-  <style>
-    body {{
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      font-size: 15px;
-      line-height: 1.6;
-      color: #1e293b;
-      max-width: 620px;
-      margin: 0 auto;
-      padding: 24px 20px;
-      background: #f8fafc;
-    }}
-    .card {{
-      background: white;
-      border-radius: 12px;
-      padding: 28px 32px;
-      border: 1px solid #e2e8f0;
-    }}
-    h2 {{
-      font-size: 22px;
-      font-weight: 600;
-      color: #0f172a;
-      margin: 0 0 20px;
-      padding-bottom: 16px;
-      border-bottom: 2px solid #1A56DB;
-    }}
-    h3 {{
-      font-size: 15px;
-      font-weight: 600;
-      color: #1e293b;
-      margin: 20px 0 8px;
-    }}
-    p, li {{ color: #334155; margin: 4px 0; }}
-    ul {{ padding-left: 18px; }}
-    .footer {{
-      text-align: center;
-      font-size: 12px;
-      color: #94a3b8;
-      margin-top: 20px;
-    }}
-  </style>
-</head>
-<body>
-  <div class="card">
-    {brief_html}
-  </div>
-  <div class="footer">
-    Jarvis · {today_str} · Sydney
-  </div>
-</body>
-</html>"""
-
-    # Build the email message
     msg = MIMEMultipart("alternative")
-    msg["Subject"] = f"Jarvis — {today_str}"
+    msg["Subject"] = subject
     msg["From"]    = config.YOUR_EMAIL
     msg["To"]      = config.YOUR_EMAIL
-    msg.attach(MIMEText(full_html, "html"))
-
-    # Gmail API requires base64-encoded raw message
+    msg.attach(MIMEText(text_body, "plain"))
+    msg.attach(MIMEText(html_body, "html"))
     raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
     service.users().messages().send(userId="me", body={"raw": raw}).execute()
-
     print(f"✅  Brief sent to {config.YOUR_EMAIL}")
 
 
@@ -926,8 +1033,11 @@ def send_email(creds, brief_html, today_str):
 # MAIN — ties everything together
 # ─────────────────────────────────────────────────────────────────────────────
 
-def run_brief():
-    """Main function — runs the full pipeline."""
+def run_brief(preview=None):
+    """
+    Main function — runs the full pipeline. preview is a file path: write the
+    rendered email there instead of sending it (the weekly review still sends).
+    """
 
     tz = pytz.timezone(config.TIMEZONE)
     today = datetime.datetime.now(tz)
@@ -1061,20 +1171,21 @@ def run_brief():
         except Exception as e:
             print(f"⚠️   Overload analysis failed: {e}")
 
-    # Fetch Google Tasks + generate today's time-blocked plan
+    # Fetch Google Tasks. Today's plan comes from the ledger (day_plan.py builds
+    # it at 05:30), so no separate Claude call generates one here.
     tasks_data = None
-    daily_plan = None
     if CALENDAR_WRITE:
         try:
             tasks_data = get_tasks_summary()
             print("📝  Tasks loaded")
         except Exception as e:
             print(f"⚠️   Tasks fetch failed: {e}")
+    daily_plan = None
+    if LEDGER_AVAILABLE:
         try:
-            daily_plan = generate_daily_plan(memory_text=memory_data or "")
-            print("🗓   Daily plan generated")
+            daily_plan = plan_text(ledger.load_day(today.date()))
         except Exception as e:
-            print(f"⚠️   Daily plan failed: {e}")
+            print(f"⚠️   Ledger plan unavailable: {e}")
 
 
     # Fetch term data
@@ -1114,22 +1225,31 @@ def run_brief():
         except Exception as e:
             print(f"⚠️   Mentor follow-up draft skipped: {e}")
 
-    # Build prompt and call Claude
-    print("🧠  Generating brief with Claude...")
+    # Claude writes the note and the one push; the rest is rendered from data.
+    print("🧠  Writing the note with Claude...")
     prompt = build_prompt(profile_text, events, emails, today_str, checkin_summary, fitbit_data, finance_data, hevy_data, memory_data, jobs_data, overload_data, pokemon_data, tasks_data, daily_plan, proposals_text, term_data, term_flags, course_topics, academic_alerts, followup_note)
-    brief  = generate_brief(prompt)
-    print("✅  Brief generated")
+    note = generate_note(prompt)
+
+    data = collect_brief_data(creds, today, note)
+    if proposals_text:
+        data["footer"] += " · proposals pending: /proposals"
+    html_body, text_body = render_brief(data)
+    print("✅  Brief rendered")
+
+    if preview:
+        Path(preview).write_text(html_body)
+        print(f"\n👀  Preview written to {preview} (not sent, not saved).\n")
+        return
 
     try:
         from agent_api import save_latest_brief
-        save_latest_brief(brief, kind="morning", label=today_str)
+        save_latest_brief(html_body, kind="morning", label=today_str)
         print("💾  Brief saved for the agent API")
     except Exception as e:
         print(f"⚠️   Could not save brief for the agent API: {e}")
 
-    # Send email
     print("📤  Sending brief...")
-    send_email(creds, brief, today_str)
+    send_email(creds, html_body, text_body, f"{today:%a %-d %b} · jarvis")
 
     print("\n✅  Done. Check your inbox.\n")
 
@@ -1143,6 +1263,7 @@ if __name__ == "__main__":
     parser.add_argument("--setup",    action="store_true", help="Authenticate with Google (run this first)")
     parser.add_argument("--test",     action="store_true", help="Run the brief right now")
     parser.add_argument("--schedule", action="store_true", help="Print cron setup instructions")
+    parser.add_argument("--preview",  metavar="FILE", help="Write the email to FILE instead of sending it")
     args = parser.parse_args()
 
     if args.setup:
@@ -1181,4 +1302,4 @@ To verify it's running, check jarvis.log after 7am.
 
     else:
         # Default: run the brief (also triggered by --test)
-        run_brief()
+        run_brief(preview=args.preview)

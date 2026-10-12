@@ -137,6 +137,10 @@ Never write outside `/Users/manavjain/jarvis/`.
   Week topics: `course_outlines.py` pulls the public UNSW outline API on Sundays
   (and `/outlines`) into `data/outlines/`; `courses/*.json` hand entries win.
   Money stakes are deferred (trial).
+- **Morning brief** is rendered by Python (`email_template.py`, dark design in
+  `docs/brief_design.html`). Claude writes only the note + one push as JSON.
+  `voice.VOICE_RULES` opens every Jarvis prompt. Preview without sending:
+  `python morning_brief.py --preview /tmp/brief.html`.
 
 ## Git
 
