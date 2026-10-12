@@ -113,7 +113,8 @@ def longest_free_minutes(now):
     """Longest free calendar gap between now and FULL_DAY_UNTIL, or None if unknown."""
     try:
         from jarvis_calendar import get_busy_periods
-        busy = get_busy_periods()
+        # Jarvis's own study blocks don't make a day "full" for skipping the gym.
+        busy = get_busy_periods(include_jarvis=False)
     except Exception:
         return None
     return _longest_gap(busy, now, _at(now.date(), FULL_DAY_UNTIL, now))

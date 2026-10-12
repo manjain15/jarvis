@@ -130,7 +130,10 @@ Never write outside `/Users/manavjain/jarvis/`.
   handles `up`, `skip <reason>` and photos, verifies with Hevy, and settles
   make-up debt at 23:00. `pace.tick()` nudges when behind step pace (10/13/16/19/21h)
   and the 23:00 close turns the shortfall into tomorrow's step debt.
-  No Anthropic calls. Money stakes are deferred (trial).
+  `day_plan.py` builds the day at 05:30 (one Claude call for block tasks):
+  study/lecture blocks from `term_context.json → study_plan`, written to Google
+  Calendar tagged `jarvis=study`, with a done/partial/no check at each block's end.
+  Money stakes are deferred (trial).
 
 ## Git
 

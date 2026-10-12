@@ -222,6 +222,35 @@ def update_workout_schedule(schedule: dict):
     mutate_context(_mutate)
 
 
+# ── Study plan ────────────────────────────────────────────────────────────────
+# Weekly hour targets per course, fixed weekly commitments the calendar doesn't
+# know about (work, travel), and daily study caps. Read by day_plan.py.
+#   targets:  {"COMP3121": {"study": 8, "lectures": 4}, ...}   hours / ISO week
+#   routine:  {"Monday": [{"start": "09:30", "end": "17:30", "label": "Work"}], ...}
+#   daily_cap_hours: {"Monday": 1.5, ...}
+#   ignore_busy: ["Lecture"]   title words that don't block study time
+
+DEFAULT_STUDY_PLAN = {
+    "targets": {},
+    "routine": {},
+    "ignore_busy": [],
+    "daily_cap_hours": {
+        "Monday": 4, "Tuesday": 4, "Wednesday": 4, "Thursday": 4,
+        "Friday": 4, "Saturday": 5, "Sunday": 5,
+    },
+}
+
+
+def get_study_plan() -> dict:
+    """Returns the study plan, with any missing section filled from DEFAULT_STUDY_PLAN."""
+    stored = load_context().get("study_plan") or {}
+    plan = {key: stored.get(key) or value for key, value in DEFAULT_STUDY_PLAN.items()}
+    caps = dict(DEFAULT_STUDY_PLAN["daily_cap_hours"])
+    caps.update(stored.get("daily_cap_hours") or {})
+    plan["daily_cap_hours"] = caps
+    return plan
+
+
 # ── Finance goals ─────────────────────────────────────────────────────────────
 # Single source of truth for savings/budget targets, stored under the
 # pre-existing "us_exchange" key (was already live with savings_target/

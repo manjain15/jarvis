@@ -82,6 +82,13 @@ except Exception as _e:
     print(f"⚠️  pace unavailable: {_e}")
     PACE_AVAILABLE = False
 
+try:
+    import day_plan
+    DAY_PLAN_AVAILABLE = True
+except Exception as _e:
+    print(f"⚠️  day_plan unavailable: {_e}")
+    DAY_PLAN_AVAILABLE = False
+
 SCRIPT_DIR  = Path(__file__).parent
 DATA_DIR    = SCRIPT_DIR / "data"
 MEMORY_DIR  = SCRIPT_DIR / "memory"
@@ -1080,12 +1087,16 @@ def _enforcer_call(fn, *args):
 
 
 def run_enforcer_tick():
-    """Advance the gym sequence and step pace, and send whatever they return."""
+    """Advance the day plan, gym sequence, step pace and block checks; send what they return."""
     messages = []
+    if DAY_PLAN_AVAILABLE:
+        _enforcer_call(day_plan.tick)  # 05:30 build. Must run before the 06:00 gym start.
     if ENFORCER_AVAILABLE:
         messages += _enforcer_call(enforcer.tick) or []
     if PACE_AVAILABLE:
         messages += _enforcer_call(pace.tick) or []
+    if DAY_PLAN_AVAILABLE and not CHECKIN["active"]:
+        messages += _enforcer_call(day_plan.check_tick) or []
     for text in messages:
         send_message(text)
         print(f"🏋️  → {text[:80]}")
@@ -1132,6 +1143,13 @@ def handle_update(update, static_context_holder):
     # ── Gym enforcer: "up" and "skip <reason>" on a gym day ──────────────────
     if ENFORCER_AVAILABLE:
         reply = _enforcer_call(enforcer.handle_text, text)
+        if reply:
+            send_message(reply)
+            return
+
+    # ── Study block check: done / partial / no ──────────────────────────────
+    if DAY_PLAN_AVAILABLE:
+        reply = _enforcer_call(day_plan.handle_reply, text)
         if reply:
             send_message(reply)
             return
