@@ -11,6 +11,11 @@ SCHEDULE (already handled if you add to crontab):
 
 OR run standalone:
   python weekly_review.py
+  python weekly_review.py --preview /tmp/review.html   # render, don't send
+
+The email uses the same dark design as the morning brief (email_template.py).
+Python builds every section from data; one Claude call writes the read on the
+week and next week's three priorities (JSON).
 """
 import warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -363,141 +368,194 @@ def collect_study_plan():
     return "\n\n".join(parts)
 
 
-# ── Generate the review ───────────────────────────────────────────────────────
+# ── Sections from data ────────────────────────────────────────────────────────
+# Every number in the email comes from here, not from Claude. Each builder is
+# a pure function over plain data so it can be tested without Google.
 
-def generate_weekly_review(health, workouts, finance, memory, job_links='', term='', study_plan=''):
-    """Sends all week data to Claude and generates the full review."""
-    tz         = TIMEZONE
-    week_start, week_end = get_week_dates()
-    week_label = f"{week_start.strftime('%d %b')} – {week_end.strftime('%d %b %Y')}"
-    next_week  = f"{(week_end + datetime.timedelta(days=1)).strftime('%d %b')} – {(week_end + datetime.timedelta(days=7)).strftime('%d %b %Y')}"
+GYM_WORDS = {"done": "Done", "partial": "Partial", "missed": "Missed",
+             "excused": "Excused", "unenforced": "Not tracked", "pending": "Open"}
 
-    profile_text  = PROFILE_FILE.read_text() if PROFILE_FILE.exists() else ""
-    semantic_path = MEMORY_DIR / "semantic.md"
-    semantic_text = semantic_path.read_text() if semantic_path.exists() else ""
 
-    client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
+def week_days(week_start, until):
+    """[(date, ledger day or None)] from week_start up to and excluding until."""
+    import ledger
+    out, day = [], week_start
+    while day < until:
+        out.append((day, ledger.load_day(day)))
+        day += datetime.timedelta(days=1)
+    return out
 
-    prompt = f"""You are Jarvis — Manav's personal AI assistant. Write his weekly review.
-This is the most important brief of the week. Be thorough, direct, and genuinely useful.
-You know him well — don't be generic, be specific to his life and goals.
 
-WEEK: {week_label}
+def _find(day, item_id):
+    for item in (day or {}).get("items", []):
+        if item.get("id") == item_id:
+            return item
+    return None
 
-MANAV'S PROFILE:
-{profile_text[:2000]}
 
-SEMANTIC MEMORY:
-{semantic_text[:1000]}
+def gym_section(days):
+    """Per-day gym rows plus the trial counts (planned, done, unexcused misses)."""
+    rows, counts = [], {}
+    for date, day in days:
+        gym = _find(day, "gym")
+        if gym is None:
+            continue
+        status = gym.get("status", "pending")
+        counts[status] = counts.get(status, 0) + 1
+        minutes = gym.get("logged_minutes")
+        right = GYM_WORDS.get(status, status) + (f" · {minutes} min" if minutes else "")
+        sub = f"skip: {gym['excuse']}" if gym.get("excuse") else None
+        rows.append({"text": f"{date:%a} · {gym['title']}", "right": right, "sub": sub,
+                     "miss": status == "missed"})
+    planned = sum(n for s, n in counts.items() if s != "unenforced")
+    done = counts.get("done", 0) + counts.get("partial", 0)
+    if planned:
+        rows.append({"text": "Sessions", "right": f"{done} / {planned}", "miss": done < planned})
+        rows.append({"text": "Unexcused misses", "right": str(counts.get("missed", 0)),
+                     "miss": counts.get("missed", 0) > 0})
+    return rows
 
-THIS WEEK'S DATA:
 
-{health}
+def steps_stats(days):
+    """Days at target, average, and lowest day, from days with phone readings."""
+    counted = []
+    for _date, day in days:
+        steps = _find(day, "steps")
+        if steps and steps.get("count"):
+            counted.append((steps["count"], steps.get("target", 10_000)))
+    if not counted:
+        return []
+    at_target = sum(1 for c, t in counted if c >= t)
+    average = sum(c for c, _t in counted) // len(counted)
+    return [
+        {"value": f"{at_target}/{len(counted)}", "label": "Days at target", "miss": at_target < len(counted)},
+        {"value": f"{average:,}", "label": "Average", "miss": average < 10_000},
+        {"value": f"{min(c for c, _t in counted):,}", "label": "Lowest", "miss": False},
+    ]
 
-{job_links}
 
-{workouts}
+def study_rows(done, targets, days_planned):
+    """
+    Hours done against the week's target per course and type. done is
+    day_plan.minutes_done's {(course, type): minutes}. Under 75% is red.
+    """
+    rows = []
+    for course, t in sorted(targets.items()):
+        for kind, key, label in (("lecture", "lectures", "lectures"), ("study", "study", "study")):
+            target = t.get(key, 0)
+            if not target:
+                continue
+            hours = done.get((course, kind), 0) / 60
+            rows.append({"text": f"{course} {label}", "right": f"{hours:g} / {target}h",
+                         "miss": days_planned and hours < target * 0.75})
+    return rows
 
-{finance}
 
-{memory}
+def money_rows(spending, savings):
+    """This week's spend against the budget, and savings progress."""
+    rows = []
+    if spending and spending.get("available"):
+        total, budget = spending.get("total_spend", 0), spending.get("weekly_budget", 75)
+        rows.append({"text": "Spent this week", "right": f"${total:,.0f} / ${budget:,.0f}",
+                     "miss": total > budget})
+    if savings and savings.get("available"):
+        goal = savings.get("exchange_target", {})
+        rows.append({"text": "Savings", "sub": "on track" if savings.get("on_track") else "behind",
+                     "right": f"${savings['balance']:,.0f} / ${goal.get('savings_goal', 0):,.0f}",
+                     "miss": not savings.get("on_track")})
+    return rows
 
-{term}
 
-STUDY PLAN INPUT (next week's topics + live assessment/revision/drift alerts):
-{study_plan if study_plan else "  No course schedule / assessment data available."}
+def next_week_rows(topics):
+    """Next week's topics per course, from course_schedule.get_week_topics."""
+    rows = []
+    for r in topics:
+        if r.get("topics"):
+            rows.append({"text": r["code"], "sub": "; ".join(r["topics"])})
+    return rows
 
-Write a full weekly review in clean HTML. Return ONLY raw HTML, no markdown, no code fences.
-Structure exactly like this:
 
-<h2>Week of {week_label} — Manav's Review</h2>
+UPKEEP_ROWS = [
+    {"text": "Export the St. George CSVs", "sub": "everyday, savings, investing → finance/, then deploy/sync-finance-up.sh"},
+    {"text": "Check term_context.json", "sub": "new due dates, internship status changes, mentor contact"},
+]
 
-<h3>📊 Week in numbers</h3>
-[A tight scorecard — 4-6 key metrics from the week with actual numbers.
-Sleep average, training sessions completed, spending total, savings progress, applications sent.
-Format as short punchy lines. Be honest — don't soften bad numbers.]
 
-<h3>💪 Health & training</h3>
-[Full honest assessment of the week's health and training.
-- Sleep: pattern, average, best and worst nights
-- Training: sessions hit vs missed, any PBs, how the split went
-- What the data says about how the body is doing
-Be specific with numbers. Flag patterns, not just one-offs.]
+# ── Claude: the read on the week ──────────────────────────────────────────────
 
-<h3>📚 Uni & term progress</h3>
-[Use TERM CONTEXT. State current term + week, the subjects he's enrolled in, and the closest
-upcoming assessments (with weights + days remaining). If due dates are missing, tell him to update
-term_context.json. Comment on whether his portfolio targets for the term are on track. 3-5 lines.]
+def weekly_prompt(context, week_label):
+    """The prompt for the note and next week's three priorities."""
+    from voice import VOICE_RULES
+    return f"""{VOICE_RULES}
 
-<h3>📚 Study plan for next week</h3>
-[Use STUDY PLAN INPUT. Lay out a concrete week-ahead study plan: which course topics are coming up, which assessments to ADVANCE (start or continue, weighted by importance — a 30% midterm outranks a 5% test), and what to REVISE for upcoming tests. Turn the alerts into specific actions — e.g. "Block two 90-min sessions for the MATH2901 midterm: re-derive the CLT and drill transformations of random variables." If a course was flagged as behind (drift alert), make catching it up the first priority. 4-6 lines.]
+This is the context for Manav's weekly review, week of {week_label}. The email
+around your text already shows the numbers: gym day by day, steps, study hours
+against target, money, debt and next week's topics. Do not repeat them as lists.
 
-<h3>💼 Career & internship</h3>
-[Honest assessment of career progress this week. Use the TERM CONTEXT internship pipeline.
-- Reference each tracked company by name with its current status (Canva OA, Amazon applied, Dolby applied)
-- Applications sent this week (number, companies)
-- Google mentor — last_contact date, awaiting_response status, any follow-up needed
-- LinkedIn, networking, portfolio work — and Jarvis as a demoable project
-- Are they moving fast enough given the term window?
-Be direct. If it was a bad week for career, say so clearly.]
+{context}
 
-<h3>💰 Finance</h3>
-[Full financial picture.
-- Spending breakdown vs ~$75/week budget
-- Any unusual transactions?
-- Savings progress toward $35k goal
-- Pokemon reselling plan — still undefined?
-- One concrete action to improve the financial situation]
+Write two things.
 
-<h3>🎯 Biggest win this week</h3>
-[The single best thing that happened or that Manav did. Be specific.
-If it was a bad week, find the one thing that went right.]
+"note": at most 3 sentences. An honest read of the week: the biggest win, the
+biggest miss, and the pattern behind them if the data shows one. Don't soften
+bad numbers.
 
-<h3>⚠️ Biggest miss this week</h3>
-[The single most important thing that didn't happen or went wrong.
-Be direct. Don't soften it. What should have happened that didn't?]
+"priorities": exactly 3 short lines for next week, one each for training, study
+and career. Concrete and checkable ("Send the Atlassian application by Wed"),
+achievable but not easy.
 
-<h3>🗓️ Focus for next week ({next_week})</h3>
-[Three specific, actionable priorities for next week — one per life area.
-Not vague goals. Actual things: "Send 2 applications by Wednesday", 
-"Hit all 5 training sessions", "Define the Pokemon reselling plan by Tuesday".
-Make them achievable but not easy.]
+Under 120 words in total. Return only JSON: {{"note": "...", "priorities": ["...", "...", "..."]}}"""
 
-<h3>🎯 Internship targets this week</h3>
-[From the job links provided, pick the 2-3 most relevant companies to check this week.
-List them with their URL. Tell Manav specifically what to do — "Open Canva careers page and
-search for software intern roles. If anything is open, apply by Wednesday."
-Also remind him to check Prosple and GradConnection. Keep it actionable, not generic.]
 
-<h3>🔧 Jarvis upkeep — answer these</h3>
-[Three direct questions for Manav to answer this week so term_context.json stays accurate:
-  • Have you updated assessment due dates in term_context.json now that Moodle has them?
-  • Any internship status changes this week (new OAs, interviews, offers, rejections)?
-  • When did you last speak to your Google mentor — and is a follow-up overdue?
-Format as a short bulleted list. Keep it punchy.]
+def parse_weekly(text):
+    """{"note", "priorities"} from Claude's reply; empty when it can't be parsed."""
+    from voice import strip_emoji
+    try:
+        data = json.loads(text[text.index("{"):text.rindex("}") + 1])
+    except Exception:
+        return {"note": "", "priorities": []}
+    priorities = [strip_emoji(str(p))[:160] for p in (data.get("priorities") or []) if str(p).strip()]
+    return {"note": strip_emoji(str(data.get("note") or ""))[:600], "priorities": priorities[:3]}
 
-<h3>⚡ One thing</h3>
-[If Manav could only do ONE thing differently next week, what would it be?
-One sentence. Sharp. Make it land.]
 
-Keep the total under 600 words. Write like you know him — because you do.
-No corporate speak. No "Great work!" Start directly with the HTML."""
+def generate_weekly_note(context, week_label):
+    """One Claude call. Any failure returns empty fields so the review still sends."""
+    try:
+        client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
+        message = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=500,
+            messages=[{"role": "user", "content": weekly_prompt(context, week_label)}],
+        )
+        return parse_weekly(message.content[0].text if message.content else "")
+    except Exception as e:
+        print(f"    ⚠️  Weekly note failed: {e} — sending the review without it")
+        return {"note": "", "priorities": []}
 
-    message = client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=3000,
-        messages=[{"role": "user", "content": prompt}]
-    )
-    if message.stop_reason == "max_tokens":
-        print("    ⚠️  Weekly review hit max_tokens and was truncated — raise max_tokens")
 
-    return message.content[0].text.strip()
+def collect_trends():
+    """Four-week trends from weekly_intelligence, as context text. No Claude call."""
+    if not INTELLIGENCE_AVAILABLE:
+        return ""
+    parts = []
+    try:
+        import weekly_intelligence as wi
+        for label, fn in (("Sleep trend", wi.collect_sleep_trend), ("Training trend", wi.collect_training_trend),
+                          ("Finance trend", wi.collect_finance_trend),
+                          ("Applications", wi.collect_application_history)):
+            try:
+                parts.append(f"{label}: {json.dumps(fn(), default=str)[:800]}")
+            except Exception:
+                continue
+    except Exception:
+        return ""
+    return "4-WEEK TRENDS:\n" + "\n".join(parts)
 
 
 # ── Send the review ───────────────────────────────────────────────────────────
 
-def send_weekly_review(review_html, week_label):
-    """Sends the weekly review via Gmail."""
+def send_weekly_review(html_body, text_body, subject):
+    """Sends the weekly review (HTML + plain text) via Gmail."""
     from google.oauth2.credentials import Credentials as _Creds
     from google.auth.transport.requests import Request as _Req
     _token_file = SCRIPT_DIR / "token.json"
@@ -509,68 +567,12 @@ def send_weekly_review(review_html, week_label):
         _tmp_file.replace(_token_file)
     service = build("gmail", "v1", credentials=creds)
 
-    import ssl, certifi
-    full_html = f"""<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8">
-  <style>
-    body {{
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      font-size: 15px;
-      line-height: 1.7;
-      color: #1e293b;
-      max-width: 640px;
-      margin: 0 auto;
-      padding: 24px 20px;
-      background: #f8fafc;
-    }}
-    .card {{
-      background: white;
-      border-radius: 12px;
-      padding: 32px 36px;
-      border: 1px solid #e2e8f0;
-    }}
-    h2 {{
-      font-size: 22px;
-      font-weight: 700;
-      color: #0f172a;
-      margin: 0 0 24px;
-      padding-bottom: 16px;
-      border-bottom: 3px solid #1A56DB;
-    }}
-    h3 {{
-      font-size: 16px;
-      font-weight: 600;
-      color: #1e293b;
-      margin: 24px 0 10px;
-    }}
-    p, li {{ color: #334155; margin: 6px 0; line-height: 1.7; }}
-    ul {{ padding-left: 20px; }}
-    strong {{ color: #0f172a; }}
-    .footer {{
-      text-align: center;
-      font-size: 12px;
-      color: #94a3b8;
-      margin-top: 20px;
-    }}
-  </style>
-</head>
-<body>
-  <div class="card">
-    {review_html}
-  </div>
-  <div class="footer">
-    Jarvis Weekly Review · {week_label} · Sydney
-  </div>
-</body>
-</html>"""
-
     msg = MIMEMultipart("alternative")
-    msg["Subject"] = f"Jarvis Weekly Review — {week_label}"
+    msg["Subject"] = subject
     msg["From"]    = config.YOUR_EMAIL
     msg["To"]      = config.YOUR_EMAIL
-    msg.attach(MIMEText(full_html, "html"))
+    msg.attach(MIMEText(text_body, "plain"))
+    msg.attach(MIMEText(html_body, "html"))
 
     raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
     service.users().messages().send(userId="me", body={"raw": raw}).execute()
@@ -579,64 +581,127 @@ def send_weekly_review(review_html, week_label):
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
-def run_weekly_review():
-    tz         = TIMEZONE
+def build_review_sections(today, note):
+    """(title, meta, sections) for the week ending yesterday (the review runs Sunday morning)."""
+    week_start = today - datetime.timedelta(days=today.weekday())
+    monday_run = today.weekday() == 0
+    if monday_run:
+        week_start -= datetime.timedelta(days=7)  # run on a Monday: review the week just gone
+    days = week_days(week_start, today)
+
+    import term_context
+    ctx = term_context.load_context()
+    week = term_context.current_term_week(ctx)
+    if week and monday_run:
+        week -= 1  # current_term_week counts today; the reviewed week is the one before
+    plan = term_context.get_study_plan()
+    targets = {c: t for c, t in plan.get("targets", {}).items() if t.get("study") or t.get("lectures")}
+
+    try:
+        import day_plan
+        done = day_plan.minutes_done(week_start, today)
+    except Exception:
+        done = {}
+    planned_days = sum(1 for _d, day in days if (day or {}).get("planned"))
+
+    try:
+        from agent_api import get_spending_payload, get_savings_payload
+        spending = get_spending_payload(week_start, today - datetime.timedelta(days=1))
+        savings = get_savings_payload()
+    except Exception as e:
+        print(f"⚠️   Finance unavailable for the review: {e}")
+        spending = savings = None
+
+    try:
+        import course_schedule
+        topics = course_schedule.get_week_topics((week or 0) + 1)
+    except Exception:
+        topics = []
+
+    try:
+        from morning_brief import due_rows, owed_rows
+        latest = days[-1][1] if days else None
+        owed = [{"text": o["label"], "right": o["value"], "miss": o.get("miss")} for o in owed_rows(latest, today)]
+        due = [{"text": d["label"], "right": d["value"], "miss": d.get("miss")}
+               for d in due_rows(term_context.get_upcoming_assessments(ctx, days_ahead=14))]
+    except Exception as e:
+        print(f"⚠️   Debt or deadlines unavailable for the review: {e}")
+        owed, due = [], []
+
+    sections = [
+        {"label": "Gym", "rows": gym_section(days)},
+        {"label": "Steps", "stats": steps_stats(days)},
+        {"label": "Study", "rows": study_rows(done, targets, planned_days)},
+        {"label": "Money", "rows": money_rows(spending, savings)},
+        {"label": "Owed", "rows": owed},
+        {"label": f"Week {(week or 0) + 1}", "rows": next_week_rows(topics)},
+        {"label": "Due soon", "rows": due},
+        {"label": "Next week", "rows": [{"text": p} for p in note.get("priorities", [])]},
+        {"label": "Upkeep", "rows": UPKEEP_ROWS},
+    ]
+    last = today - datetime.timedelta(days=1)
+    title = f"Week {week} review" if week else "Weekly review"
+    meta = f"{week_start:%-d %b} – {last:%-d %b} · {ctx.get('term', {}).get('name', '')}".strip(" ·")
+    return title, meta, sections
+
+
+def run_weekly_review(preview=None):
+    """Collect the week, write the note with Claude, render and send. preview writes to a file instead."""
+    from email_template import render_sections
+    tz = TIMEZONE
+    now = datetime.datetime.now(tz)
     week_start, week_end = get_week_dates()
     week_label = f"{week_start.strftime('%d %b')} – {week_end.strftime('%d %b %Y')}"
 
     print(f"\n📋  Jarvis weekly review — {week_label}")
     print("    ─────────────────────────────────────")
 
-    print("💪  Collecting health data...")
-    health = collect_health_data(week_start, week_end)
-
-    print("🏋️   Collecting workout data...")
-    workouts = collect_workout_data(week_start, week_end)
-
-    print("💰  Collecting finance data...")
-    finance = collect_finance_data(week_start, week_end)
-
-    print("🧠  Loading episodic memory...")
-    memory = collect_episodic_memory(week_start, week_end)
-
-    print("🔍  Loading job links...")
+    # Context for Claude's read on the week. The numbers in the email come from
+    # build_review_sections, not from this text.
+    print("💪  Collecting context...")
     try:
         from job_search import get_links_for_weekly_review
         job_links = get_links_for_weekly_review()
     except Exception:
         job_links = ""
+    profile_text = PROFILE_FILE.read_text()[:2000] if PROFILE_FILE.exists() else ""
+    context = "\n\n".join(x for x in (
+        f"PROFILE:\n{profile_text}",
+        collect_health_data(week_start, week_end),
+        collect_workout_data(week_start, week_end),
+        collect_finance_data(week_start, week_end),
+        collect_episodic_memory(week_start, week_end),
+        collect_term_context(),
+        collect_study_plan(),
+        collect_trends(),
+        job_links,
+    ) if x)
 
-    print("📚  Loading term context...")
-    term = collect_term_context()
+    print("✍️   Writing the note with Claude...")
+    note = generate_weekly_note(context[:14000], week_label)
 
-    print("📚  Building study plan...")
-    study_plan = collect_study_plan()
+    title, meta, sections = build_review_sections(now.date(), note)
+    html_body, text_body = render_sections(title, meta, note.get("note"), sections, f"jarvis · {now:%H:%M}")
 
-    print("✍️   Generating review with Claude...")
-    review_html = generate_weekly_review(health, workouts, finance, memory, job_links, term, study_plan)
-
-    # Append intelligence report to the review
-    if INTELLIGENCE_AVAILABLE:
-        try:
-            print("🧠  Generating intelligence report...")
-            intelligence_html = get_intelligence_html()
-            review_html = review_html + intelligence_html
-            print("✅  Intelligence report added")
-        except Exception as e:
-            print(f"⚠️   Intelligence report failed: {e}")
+    if preview:
+        Path(preview).write_text(html_body)
+        print(f"\n👀  Preview written to {preview} (not sent, not saved).\n")
+        return
 
     try:
         from agent_api import save_latest_brief
-        save_latest_brief(review_html, kind="weekly", label=week_label)
+        save_latest_brief(html_body, kind="weekly", label=week_label)
         print("💾  Review saved for the agent API")
     except Exception as e:
         print(f"⚠️   Could not save review for the agent API: {e}")
 
     print("📤  Sending review...")
-    send_weekly_review(review_html, week_label)
-
-    print(f"\n✅  Weekly review sent. Check your inbox.\n")
+    send_weekly_review(html_body, text_body, f"{title} · jarvis")
+    print("\n✅  Weekly review sent. Check your inbox.\n")
 
 
 if __name__ == "__main__":
-    run_weekly_review()
+    import argparse
+    parser = argparse.ArgumentParser(description="Jarvis weekly review")
+    parser.add_argument("--preview", metavar="FILE", help="Write the email to FILE instead of sending it")
+    run_weekly_review(preview=parser.parse_args().preview)

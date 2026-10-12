@@ -1,12 +1,13 @@
 """
 Jarvis — Email Template
 =======================
-Renders the morning brief (and, later, the weekly review) in the approved
+Renders Jarvis's emails (the morning brief and the weekly review) in the approved
 dark design (docs/brief_design.html) as email-safe HTML: tables, inline
 styles and bgcolor attributes, because Gmail strips <style> blocks and most
 layout CSS. Also returns a plain-text version for the text/plain part.
 
-render_brief(data) takes plain values only; every number is computed by the
+render_sections() is the general renderer; render_brief() maps the brief's
+data onto it. Both take plain values only; every number is computed by the
 caller from Jarvis's data. Sections with nothing in them are left out.
 
     data = {
@@ -98,66 +99,16 @@ def _stats(stats):
             f'cellspacing="0" border="0" style="border-collapse:collapse;"><tr>{cells}</tr></table></td></tr>')
 
 
-def render_brief(data):
-    """(html, text) for the morning brief."""
-    parts = [
-        f'<tr><td style="font-family:{SANS};font-size:26px;line-height:1.2;font-weight:600;'
-        f'letter-spacing:-0.5px;color:{INK};">{_e(data["title"])}</td></tr>',
-        f'<tr><td style="font-family:{SANS};font-size:14px;color:{SUB};padding-top:6px;">'
-        f'{_e(data.get("meta"))}</td></tr>',
-    ]
-    text = [data["title"], data.get("meta", ""), ""]
-
-    if data.get("note"):
-        parts.append(
-            f'<tr><td style="padding-top:28px;"><table role="presentation" cellpadding="0" cellspacing="0" '
-            f'border="0"><tr><td width="2" bgcolor="{INK}" style="background:{INK};width:2px;"></td>'
-            f'<td style="padding-left:14px;font-family:{SANS};font-size:15px;line-height:1.6;color:{INK};">'
-            f'{_e(data["note"])}</td></tr></table></td></tr>')
-        text += [data["note"], ""]
-
-    if data.get("owed"):
-        parts.append(_label("Owed"))
-        parts.append(_rows([(_text_cell(o["label"], miss=o.get("miss")), _right_cell(o["value"], miss=o.get("miss")))
-                            for o in data["owed"]]))
-        text += ["OWED"] + [f"  {o['label']}  {o['value']}" for o in data["owed"]] + [""]
-
-    if data.get("today"):
-        parts.append(_label("Today"))
-        parts.append(_rows([(_time_cell(r["time"]), _text_cell(r["title"], r.get("sub"), miss=r.get("miss")))
-                            for r in data["today"]]))
-        text += ["TODAY"] + [f"  {r['time']:<6} {r['title']}" + (f" — {r['sub']}" if r.get("sub") else "")
-                             for r in data["today"]] + [""]
-
-    if data.get("due"):
-        parts.append(_label("Due soon"))
-        parts.append(_rows([(_text_cell(d["label"], miss=d.get("miss")), _right_cell(d["value"], miss=d.get("miss")))
-                            for d in data["due"]]))
-        text += ["DUE SOON"] + [f"  {d['label']}  {d['value']}" for d in data["due"]] + [""]
-
-    if data.get("yesterday"):
-        parts.append(_label("Yesterday"))
-        parts.append(_stats(data["yesterday"]))
-        text += ["YESTERDAY"] + [f"  {s['label']}: {s['value']}" for s in data["yesterday"]] + [""]
-
-    if data.get("push"):
-        parts.append(_label("One push"))
-        parts.append(_rows([(_text_cell(data["push"]), "")]))
-        text += ["ONE PUSH", f"  {data['push']}", ""]
-
-    parts.append(f'<tr><td style="padding-top:40px;font-family:{SANS};font-size:12px;color:{SUB};">'
-                 f'{_e(data.get("footer"))}</td></tr>')
-    text.append(data.get("footer", ""))
-
-    body = "".join(parts)
-    page = f"""<!DOCTYPE html>
+def _page(title, body):
+    """Wrap section rows in the outer dark email shell."""
+    return f"""<!DOCTYPE html>
 <html lang="en" style="background:{OUTER};">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <meta name="supported-color-schemes" content="dark">
-<title>{_e(data["title"])}</title>
+<title>{_e(title)}</title>
 </head>
 <body bgcolor="{OUTER}" style="margin:0;padding:0;background:{OUTER};">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="{OUTER}" style="background:{OUTER};">
@@ -173,4 +124,69 @@ def render_brief(data):
 </table>
 </body>
 </html>"""
-    return page, "\n".join(text).strip() + "\n"
+
+
+def render_sections(title, meta, note, sections, footer):
+    """
+    (html, text) for any Jarvis email. sections is a list of
+      {"label": "Gym", "rows": [{"text", "sub"?, "right"?, "time"?, "miss"?}]}
+      {"label": "Yesterday", "stats": [{"value", "label", "miss"?}]}
+    Sections with no rows or stats are left out.
+    """
+    parts = [
+        f'<tr><td style="font-family:{SANS};font-size:26px;line-height:1.2;font-weight:600;'
+        f'letter-spacing:-0.5px;color:{INK};">{_e(title)}</td></tr>',
+        f'<tr><td style="font-family:{SANS};font-size:14px;color:{SUB};padding-top:6px;">'
+        f'{_e(meta)}</td></tr>',
+    ]
+    text = [title, meta or "", ""]
+
+    if note:
+        parts.append(
+            f'<tr><td style="padding-top:28px;"><table role="presentation" cellpadding="0" cellspacing="0" '
+            f'border="0"><tr><td width="2" bgcolor="{INK}" style="background:{INK};width:2px;"></td>'
+            f'<td style="padding-left:14px;font-family:{SANS};font-size:15px;line-height:1.6;color:{INK};">'
+            f'{_e(note)}</td></tr></table></td></tr>')
+        text += [note, ""]
+
+    for section in sections:
+        rows, stats = section.get("rows") or [], section.get("stats") or []
+        if not rows and not stats:
+            continue
+        parts.append(_label(section["label"]))
+        text.append(section["label"].upper())
+        if stats:
+            parts.append(_stats(stats))
+            text += [f"  {s['label']}: {s['value']}" for s in stats]
+        if rows:
+            cells = []
+            for r in rows:
+                left = _time_cell(r["time"]) if r.get("time") else ""
+                right = _right_cell(r["right"], miss=r.get("miss")) if r.get("right") else ""
+                cells.append((left + _text_cell(r["text"], r.get("sub"), miss=r.get("miss")), right))
+                line = "  " + (f"{r['time']:<6} " if r.get("time") else "") + r["text"]
+                line += f"  {r['right']}" if r.get("right") else ""
+                line += f" — {r['sub']}" if r.get("sub") else ""
+                text.append(line)
+            parts.append(_rows(cells))
+        text.append("")
+
+    parts.append(f'<tr><td style="padding-top:40px;font-family:{SANS};font-size:12px;color:{SUB};">'
+                 f'{_e(footer)}</td></tr>')
+    text.append(footer or "")
+    return _page(title, "".join(parts)), "\n".join(text).strip() + "\n"
+
+
+def render_brief(data):
+    """(html, text) for the morning brief. See the module docstring for data."""
+    sections = [
+        {"label": "Owed", "rows": [{"text": o["label"], "right": o["value"], "miss": o.get("miss")}
+                                   for o in data.get("owed") or []]},
+        {"label": "Today", "rows": [{"time": r["time"], "text": r["title"], "sub": r.get("sub"),
+                                     "miss": r.get("miss")} for r in data.get("today") or []]},
+        {"label": "Due soon", "rows": [{"text": d["label"], "right": d["value"], "miss": d.get("miss")}
+                                       for d in data.get("due") or []]},
+        {"label": "Yesterday", "stats": data.get("yesterday") or []},
+        {"label": "One push", "rows": [{"text": data["push"]}] if data.get("push") else []},
+    ]
+    return render_sections(data["title"], data.get("meta"), data.get("note"), sections, data.get("footer"))

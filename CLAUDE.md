@@ -141,6 +141,10 @@ Never write outside `/Users/manavjain/jarvis/`.
   `docs/brief_design.html`). Claude writes only the note + one push as JSON.
   `voice.VOICE_RULES` opens every Jarvis prompt. Preview without sending:
   `python morning_brief.py --preview /tmp/brief.html`.
+- **Weekly review** (Sundays) uses the same template (`render_sections`): gym by
+  day, steps, study hours vs target, money, debt, next week's topics. One Claude
+  call writes the note + three priorities (JSON); the intelligence report's
+  trends are context, not a second call. `python weekly_review.py --preview FILE`.
 
 ## Git
 

@@ -1046,7 +1046,7 @@ def run_brief(preview=None):
     # On Sundays, run the weekly review instead of the standard brief
     if today.weekday() == 6 and WEEKLY_REVIEW_AVAILABLE:
         print(f"\n📋  Sunday detected — running weekly review instead of morning brief")
-        run_weekly_review()
+        run_weekly_review(preview=preview)
         return
 
     print(f"\n🤖  Jarvis morning brief — {today_str}")
