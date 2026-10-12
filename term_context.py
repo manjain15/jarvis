@@ -62,6 +62,7 @@ MENTOR_WRITABLE_FIELDS = (
     "awaiting_response",
     "next_action",
     "notes",
+    "paused",  # true: no follow-up flags or drafts (e.g. "leave her alone for now")
 )
 INTERNSHIP_WRITABLE_FIELDS = (
     "status",
@@ -571,6 +572,8 @@ def get_mentor_flags(ctx: dict) -> list:
     mentor = ctx.get("mentor", {})
     flags  = []
 
+    if mentor.get("paused"):
+        return flags
     if mentor.get("awaiting_response"):
         last_raw = mentor.get("last_contact")
         if last_raw:
@@ -753,11 +756,11 @@ def _clean_mentor_updates(updates):
         cleaned["last_contact"] = _parse_iso_date(updates["last_contact"], "last_contact")
     if "last_topic" in updates:
         cleaned["last_topic"] = _parse_text(updates["last_topic"], "last_topic", _TEXT_LIMITS["last_topic"])
-    if "awaiting_response" in updates:
-        value = updates["awaiting_response"]
-        if not isinstance(value, bool):
-            raise ValueError("awaiting_response must be a boolean")
-        cleaned["awaiting_response"] = value
+    for flag in ("awaiting_response", "paused"):
+        if flag in updates:
+            if not isinstance(updates[flag], bool):
+                raise ValueError(f"{flag} must be a boolean")
+            cleaned[flag] = updates[flag]
     if "next_action" in updates:
         cleaned["next_action"] = _parse_text(updates["next_action"], "next_action", _TEXT_LIMITS["next_action"])
     if "notes" in updates:

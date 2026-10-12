@@ -25,6 +25,9 @@ The agent API reuses existing code:
   atomic update the flags read on the next request.
 - `POST /events` and `GET /today` use the daily ledger (`ledger.py`,
   `data/ledger/YYYY-MM-DD.json`). See `docs/REWORK.md`.
+- `GET /checkin/today` and `POST /checkin` run the coach's evening check-in
+  (`evening_checkin.today_checkin` / `submit_checkin`). `GET /areas` and
+  `PATCH /areas/<name>` use `areas.py`. The bot instructions are in `docs/grok_bots.md`.
 
 ## Auth
 
@@ -49,10 +52,10 @@ can call):
 
 | Actor | Routes |
 | --- | --- |
-| `career` | `/health`, `/flags`, `/context`, `/mentor`, `/internships`, `/today` |
+| `career` | `/health`, `/flags`, `/context`, `/mentor`, `/internships`, `/today`, `/areas` |
 | `study` | `/health`, `/flags`, `/context`, `/today` |
 | `money` | `/health`, `/flags`, `/spend`, `/finance` and `/finance/*`, `/today` |
-| `coach` | `/health`, `/flags`, `/context`, `/today` |
+| `coach` | `/health`, `/flags`, `/context`, `/today`, `/checkin`, `/areas` |
 | `phone` | `/health`, `/events` |
 | `owner` (`JARVIS_API_TOKEN`) | every route |
 
@@ -368,6 +371,31 @@ curl -sS -H "Authorization: Bearer $PHONE_TOKEN" \
 `GET /today` returns today's ledger, creating it if it does not exist:
 the split, wake time, sleep, each commitment (gym, steps) with its status,
 the carried debt, and `event_count`. The raw event log is not returned.
+
+### Evening check-in
+
+`GET /checkin/today` returns `facts` (gym, steps, study blocks, weekly checks,
+the area block, debt, tomorrow, areas) and `questions`. Each question is
+`{"id", "kind": "text"|"number", "text", "optional"?}`. Ask them in order.
+
+`POST /checkin` takes `{"answers": {"<id>": "<answer>"}, "notes": "..."}`.
+Unknown ids are 400. A blank or `skip` answer is dropped. `weight` must be
+40–150 kg. The handler:
+- stores what's left on partial blocks, which carries into tomorrow's tasks
+- sets area next actions (one Claude call, which also writes tomorrow's handoff summary)
+- writes `data/checkin_<date>.json` and `data/summary_<date>.txt`
+
+It returns `{"ok", "date", "summary", "actions"}`.
+
+### Areas
+
+`GET /areas` returns each area (`project`, `portfolio`, `career`,
+`networking`, `weight`) with `next_action`, `last_touched`, `days_since`,
+`this_week`, `target_per_week` and `paused`, plus `most_neglected`.
+
+`PATCH /areas/<name>` takes any of `next_action`, `paused`, `paused_reason`,
+`notes`, `target_per_week` (0–7), and `touched` (`YYYY-MM-DD`, not in the
+future). It records the actor in the audit log. An unknown area is 404.
 
 ### Correct the mentor record
 

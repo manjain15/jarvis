@@ -436,7 +436,7 @@ def cap_section(text, limit):
     return cut + "\n…(section shortened)"
 
 
-def build_prompt(profile_text, events, emails, today_str, checkin_summary=None, fitbit_data=None, finance_data=None, hevy_data=None, memory_data=None, jobs_data=None, overload_data=None, pokemon_data=None, tasks_data=None, daily_plan=None, proposals_text=None, term_data=None, term_flags=None, course_topics=None, academic_alerts=None, followup_note=None):
+def build_prompt(profile_text, events, emails, today_str, checkin_summary=None, fitbit_data=None, finance_data=None, hevy_data=None, memory_data=None, jobs_data=None, overload_data=None, pokemon_data=None, tasks_data=None, daily_plan=None, proposals_text=None, term_data=None, term_flags=None, course_topics=None, academic_alerts=None, followup_note=None, areas_text=None):
     """
     Constructs the full prompt sent to Claude.
     Returns a string.
@@ -690,6 +690,10 @@ MENTOR FOLLOW-UP DRAFT:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 {followup_section}
 
+AREAS (days since last worked on; paused ones are never pushed):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+{areas_text or "  Areas unavailable."}
+
 ────────────────────────────
 YOUR TASK
 ────────────────────────────
@@ -701,9 +705,9 @@ a deadline colliding with missed study, an email that needs action today, a stal
 internship or mentor flag, spending off track (budget ~${_fin_goals['weekly_budget']:.0f}/week, savings
 ${_fin_goals['savings_goal']:,.0f} by {_fin_deadline_str}). If nothing stands out, one sentence on today's main study goal.
 
-"push": 1 sentence. One concrete step for career, networking, portfolio or the passion
-project that fits today. If a mentor draft is waiting in Gmail, name its subject.
-Rotate areas across days; use memory to avoid repeating recent pushes.
+"push": 1 sentence. The next action of the area marked MOST NEGLECTED in AREAS, made
+specific for today (today's plan has a 45-min block for it). Never push a paused area.
+If a mentor draft is waiting in Gmail and networking isn't paused, you may name its subject instead.
 
 The note and the push must be about different things. If the push covers the mentor
 draft, the note covers something else.
@@ -799,6 +803,9 @@ def today_rows(day, calendar_items, classes, travel_minutes=5):
                     sub += f" · moved from {item['moved_from']}"
             rows.append((item["slot"], item["title"], sub, status == "missed"))
         elif kind == "study":
+            start = datetime.datetime.fromisoformat(item["start"])
+            rows.append((_hm(start), item["title"], f"{item['task']} · {item['minutes']} min", False))
+        elif kind == "area":
             start = datetime.datetime.fromisoformat(item["start"])
             rows.append((_hm(start), item["title"], f"{item['task']} · {item['minutes']} min", False))
         elif kind == "check":
@@ -951,6 +958,23 @@ def _weight(yesterday):
     then_w = read(yesterday - datetime.timedelta(days=7))
     delta = round(now_w - then_w, 1) if now_w and then_w else None
     return now_w, delta
+
+
+def areas_context():
+    """The AREAS prompt section: one line per area, most neglected marked. '' on failure."""
+    try:
+        import areas
+        data = areas.summary(areas.refresh_evidence())
+    except Exception as e:
+        print(f"⚠️   Areas unavailable for the brief: {e}")
+        return ""
+    lines = []
+    for a in data["areas"]:
+        mark = "  ← MOST NEGLECTED" if a["name"] == data["most_neglected"] else ""
+        state = f"PAUSED ({a['paused_reason'] or 'no reason'})" if a["paused"] else f"{a['days_since']}d since"
+        lines.append(f"  • {a['label']}: {state}, {a['this_week']}/{a['target_per_week']} this week. "
+                     f"Next: {a['next_action'] or '—'}{mark}")
+    return "\n".join(lines)
 
 
 def plan_text(day):
@@ -1227,7 +1251,7 @@ def run_brief(preview=None):
 
     # Claude writes the note and the one push; the rest is rendered from data.
     print("🧠  Writing the note with Claude...")
-    prompt = build_prompt(profile_text, events, emails, today_str, checkin_summary, fitbit_data, finance_data, hevy_data, memory_data, jobs_data, overload_data, pokemon_data, tasks_data, daily_plan, proposals_text, term_data, term_flags, course_topics, academic_alerts, followup_note)
+    prompt = build_prompt(profile_text, events, emails, today_str, checkin_summary, fitbit_data, finance_data, hevy_data, memory_data, jobs_data, overload_data, pokemon_data, tasks_data, daily_plan, proposals_text, term_data, term_flags, course_topics, academic_alerts, followup_note, areas_text=areas_context())
     note = generate_note(prompt)
 
     data = collect_brief_data(creds, today, note)

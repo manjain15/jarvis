@@ -22,6 +22,9 @@ SIZING:
   capped at today's cap; lectures keep priority when it binds.
   done counts in full, partial as half.
 
+AREA BLOCK: one 45-min block for the most neglected unpaused area (areas.py),
+after the study blocks and outside the study cap, with its next action as the task.
+
 BLOCKS: 60 or 90 min, 08:00–21:00, 15 min clear of anything busy. One
 Claude call writes the task for every block (fallback: plain text from the
 course schedule). Calendar events are tagged jarvis=study; a re-plan only
@@ -384,11 +387,49 @@ def place(blocks, gaps):
 # ── Tasks ────────────────────────────────────────────────────────────────────
 
 def leftovers(date):
-    """Yesterday's unfinished study tasks as [(course, type, task, status)]."""
+    """
+    Yesterday's unfinished study tasks as [(course, type, task, status)]. When
+    the check-in said what's left, that replaces the full task.
+    """
     stored = ledger.load_day(date - datetime.timedelta(days=1)) or {}
-    return [(i["course"], i["type"], i["task"], i["status"])
+    return [(i["course"], i["type"], i.get("left") or i["task"], i["status"])
             for i in stored.get("items", [])
             if i.get("kind") == "study" and i.get("status") in ("partial", "no", "no_reply", "pending")]
+
+
+# ── Area block ───────────────────────────────────────────────────────────────
+
+AREA_BLOCK_MIN = 45
+
+
+def area_pick(date):
+    """The most neglected unpaused, blockable area (areas.py), or None."""
+    try:
+        import areas
+        return next(iter(areas.most_neglected(areas.refresh_evidence(), date, blockable_only=True)), None)
+    except Exception as e:
+        print(f"⚠️  day_plan: areas unavailable: {e}")
+        return None
+
+
+def place_area_block(area, gaps, placed):
+    """
+    (start, end) for one AREA_BLOCK_MIN block after the study blocks, in
+    the first gap with room, or None. Not counted against the study cap.
+    """
+    taken = [(s, e) for _c, _k, s, e in placed]
+    buf = datetime.timedelta(minutes=BUFFER_MIN)
+    length = datetime.timedelta(minutes=AREA_BLOCK_MIN)
+    for g_start, g_end in gaps:
+        cursor = g_start
+        for s_, e_ in sorted(taken):
+            if s_ < g_end and e_ > g_start:
+                if s_ - cursor >= length:
+                    return cursor, cursor + length
+                cursor = max(cursor, e_ + buf)
+        if g_end - cursor >= length:
+            return cursor, cursor + length
+    return None
 
 
 def fallback_task(course, kind, context, carried):
@@ -462,13 +503,15 @@ def _title(course, kind):
     return f"Lecture · {course}" if kind == "lecture" else f"Study · {course}"
 
 
-def build_plan(now=None, dry_run=False, busy_fn=None, tasks_fn=None, calendar=None, class_fn=None):
+def build_plan(now=None, dry_run=False, busy_fn=None, tasks_fn=None, calendar=None, class_fn=None,
+               area_fn=None):
     """
     Plan today. Returns the study items. dry_run computes and returns them
     without touching the calendar or the ledger.
     calendar: object with create(title, start, end, description, date_str) -> id,
     delete_all(date_str). Defaults to Google Calendar.
     class_fn(date, code) says whether the timetable has that class (weekly checks).
+    area_fn(date) picks the area for the area block (default: areas.most_neglected).
     """
     import enforcer
     now = now or ledger.now_local()
@@ -505,6 +548,9 @@ def build_plan(now=None, dry_run=False, busy_fn=None, tasks_fn=None, calendar=No
     placed = place(fit_cap(requested_blocks(alloc), cap), gaps)
     tasks = tasks_fn(placed, course_context(date, targets), leftovers(date)) if placed else []
 
+    area = area_pick(date) if area_fn is None else area_fn(date)
+    area_slot = place_area_block(area, gaps, placed) if area else None
+
     items = []
     for n, ((course, kind, start, end), task) in enumerate(zip(placed, tasks), 1):
         items.append({
@@ -513,6 +559,14 @@ def build_plan(now=None, dry_run=False, busy_fn=None, tasks_fn=None, calendar=No
             "start": start.isoformat(timespec="minutes"), "end": end.isoformat(timespec="minutes"),
             "minutes": int((end - start).total_seconds() // 60),
             "status": "pending", "event_id": None, "asked_at": None,
+        })
+    if area_slot:
+        start, end = area_slot
+        items.append({
+            "id": "area-1", "kind": "area", "area": area["name"], "title": area["label"],
+            "task": area.get("next_action") or "Pick the next step",
+            "start": start.isoformat(timespec="minutes"), "end": end.isoformat(timespec="minutes"),
+            "minutes": AREA_BLOCK_MIN, "status": "pending", "event_id": None, "asked_at": None,
         })
     checks = weekly_check_items(plan, date, class_fn=class_fn)
     if dry_run:
@@ -526,7 +580,7 @@ def build_plan(now=None, dry_run=False, busy_fn=None, tasks_fn=None, calendar=No
             datetime.datetime.fromisoformat(item["end"]), item["task"], date_str)
 
     def _save(d):
-        d["items"] = [i for i in d["items"] if i.get("kind") not in ("study", "check")] \
+        d["items"] = [i for i in d["items"] if i.get("kind") not in ("study", "check", "area")] \
             + items + checks
         g = ledger.find_item(d, "gym")
         if g is not None and new_slot and g.get("status") == "pending" \
@@ -617,6 +671,8 @@ def weekly_check_items(plan, date, class_fn=None):
 # ── Block and check questions ────────────────────────────────────────────────
 
 def _question(item):
+    if item["kind"] == "area":
+        return f"{item['title']} · {item['task']}. Done? done / partial / no"
     if item["kind"] == "check":
         lead = "Still open: " if item.get("followup_sent") else ""
         return f"{lead}{item['label']}. Done? done / no"
@@ -626,7 +682,7 @@ def _question(item):
 
 def _due_at(item):
     """When an item's next question is due, or None when it has nothing to ask."""
-    if item["kind"] == "study":
+    if item["kind"] in ("study", "area"):
         if item["status"] == "pending" and not item.get("asked_at"):
             return datetime.datetime.fromisoformat(item["end"])
         return None
@@ -642,7 +698,7 @@ def check_tick(now=None):
     now = now or ledger.now_local()
 
     def _check(day):
-        askable = [i for i in day.get("items", []) if i.get("kind") in ("study", "check")]
+        askable = [i for i in day.get("items", []) if i.get("kind") in ("study", "check", "area")]
         for item in askable:
             if item["status"] == "pending" and item.get("asked_at"):
                 asked = datetime.datetime.fromisoformat(item["asked_at"])
@@ -681,9 +737,11 @@ def handle_reply(text, now=None):
     else:
         return None
 
+    touched = []
+
     def _answer(day):
         for item in day.get("items", []):
-            if item.get("kind") not in ("study", "check") or item["status"] != "pending" \
+            if item.get("kind") not in ("study", "check", "area") or item["status"] != "pending" \
                     or not item.get("asked_at"):
                 continue
             answered = status
@@ -691,6 +749,10 @@ def handle_reply(text, now=None):
                 answered = "no"
             item["status"] = answered
             item["answered_at"] = now.isoformat(timespec="seconds")
+            if item["kind"] == "area" and answered in ("done", "partial"):
+                touched.append(item["area"])
+            if item["kind"] == "area" and answered != "done":
+                return "Logged. It stays the push until it moves."
             if answered == "done":
                 return "Logged."
             if item["kind"] == "check":
@@ -702,7 +764,14 @@ def handle_reply(text, now=None):
             return "Rolls to tomorrow."
         return None
 
-    return ledger.update_day(now.date(), _answer)
+    reply = ledger.update_day(now.date(), _answer)
+    for name in touched:
+        try:
+            import areas
+            areas.mutate(lambda a, n=name: areas.touch(a, n, now.date(), "block"))
+        except Exception as e:
+            print(f"⚠️  day_plan: couldn't mark {name} touched: {e}")
+    return reply
 
 
 if __name__ == "__main__":

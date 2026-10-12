@@ -48,6 +48,7 @@ def store(tmp_path, monkeypatch):
     monkeypatch.setattr(day_plan, "course_context", lambda date, courses: {c: {"week": 5, "notes": []} for c in courses})
     monkeypatch.setattr(day_plan, "ANTHROPIC_AVAILABLE", False)
     monkeypatch.setattr(day_plan, "_last_attempt", {})
+    monkeypatch.setattr(day_plan, "area_pick", lambda date: None)  # area tests pass area_fn
     import term_context
     monkeypatch.setattr(term_context, "get_workout_schedule", lambda: dict(term_context.DEFAULT_WORKOUT_SCHEDULE))
 
@@ -381,3 +382,50 @@ def test_replan_keeps_one_set_of_checks(monkeypatch):
     _thursday_checks(monkeypatch)
     _thursday_checks(monkeypatch)
     assert [c["id"] for c in _checks()] == ["scif1000-pre", "scif1000-post"]
+
+
+
+# ── Area block ───────────────────────────────────────────────────────────────
+
+AREA = {"name": "project", "label": "Passion project", "next_action": "Write the one-page concept"}
+
+
+def test_area_block_follows_the_study_blocks_outside_the_cap(monkeypatch):
+    items = day_plan.build_plan(now=at(5, 30), busy_fn=lambda: [], tasks_fn=plain,
+                                calendar=FakeCalendar(), area_fn=lambda d: AREA)
+    study = [i for i in items if i["kind"] == "study"]
+    area = [i for i in items if i["kind"] == "area"]
+    assert sum(i["minutes"] for i in study) <= 240
+    assert len(area) == 1 and area[0]["minutes"] == 45
+    assert area[0]["title"] == "Passion project" and area[0]["task"] == "Write the one-page concept"
+    last_study_end = max(datetime.datetime.fromisoformat(i["end"]) for i in study)
+    assert datetime.datetime.fromisoformat(area[0]["start"]) >= last_study_end
+    stored = [i for i in ledger.load_day(TUESDAY)["items"] if i.get("kind") == "area"]
+    assert len(stored) == 1
+
+
+def test_area_block_needs_room():
+    gaps = [(at(8), at(9))]
+    placed = [("MATH2931", "lecture", at(8), at(9))]
+    assert day_plan.place_area_block(AREA, gaps, placed) is None
+    assert day_plan.place_area_block(AREA, [(at(8), at(10))], placed) == (at(9, 15), at(10, 0))
+
+
+def test_area_block_check_touches_the_area(monkeypatch, tmp_path):
+    import areas
+    monkeypatch.setattr(areas, "AREAS_FILE", tmp_path / "areas.json")
+    day_plan.build_plan(now=at(5, 30), busy_fn=lambda: [], tasks_fn=plain,
+                        calendar=FakeCalendar(), area_fn=lambda d: AREA)
+    ledger.update_day(TUESDAY, lambda d: [x.update(status="done") for x in d["items"] if x.get("kind") == "study"])
+    area = [i for i in ledger.load_day(TUESDAY)["items"] if i.get("kind") == "area"][0]
+    end = datetime.datetime.fromisoformat(area["end"])
+    assert day_plan.check_tick(end) == ["Passion project · Write the one-page concept. Done? done / partial / no"]
+    assert day_plan.handle_reply("partial", now=end) == "Logged. It stays the push until it moves."
+    assert areas.load()["project"]["last_touched"] == "2026-10-13"
+
+
+def test_check_in_leftover_replaces_the_task():
+    ledger.update_day(MONDAY, lambda d: d["items"].append(
+        {"kind": "study", "course": "MATH2931", "type": "study", "task": "W5 tutorial Q1-6",
+         "left": "Q5-6", "minutes": 60, "status": "partial"}))
+    assert day_plan.leftovers(TUESDAY) == [("MATH2931", "study", "Q5-6", "partial")]
