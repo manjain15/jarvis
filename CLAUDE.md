@@ -158,10 +158,15 @@ Never write outside `/Users/manavjain/jarvis/`.
   career, networking, weight; the plan adds a 45-min block for the most neglected
   unpaused area and the brief's push uses it. `mentor.paused` stops follow-ups.
   Bot instructions: `docs/grok_bots.md`.
+- **Lecture blocks** only cover lectures that have happened (timetable feed via
+  `day_plan.lecture_supply`); study blocks never get lecture tasks. One-off
+  schedule changes live in `data/schedule_overrides.json` (`POST /schedule`, or
+  extracted at check-in); a change for today re-plans the rest of the day.
 
 ## Git
 
-- Never include Co-Authored-By lines (or any AI attribution) in commit messages.
+- Never include Co-Authored-By lines (or any AI attribution) in commit messages
+  or PR descriptions — no "Generated with Claude Code" footer either.
 
 ## What NOT to do
 

@@ -168,3 +168,51 @@ def test_routes_and_scopes(monkeypatch, tmp_path):
     assert json.loads((tmp_path / "audit.jsonl").read_text().splitlines()[-1])["actor"] == "career"
     assert c.patch("/areas/music", headers=_auth(CAREER), json={"next_action": "x"}).status_code == 404
     assert c.patch("/areas/career", headers=_auth(CAREER), json={"paused": "no"}).status_code == 400
+
+
+def test_schedule_change_from_the_checkin():
+    import day_plan
+    _seed_day()
+
+    def actions(facts, answers, notes):
+        return {"summary": "s", "areas": {}, "schedule_changes": [
+            {"date": "2026-10-14", "add": [{"start": "09:30", "end": "17:30", "label": "Automation work"}]},
+            {"date": "2026-09-01", "remove": ["Automation work"]},          # in the past: ignored
+            {"date": "2026-10-15", "add": [{"start": "nine", "end": "5"}]},  # invalid: ignored
+        ]}
+
+    out = ec.submit_checkin({"answers": {"tomorrow_focus": "lecture after work"}}, now=at(21), actions_fn=actions)
+    assert "Schedule Wed 14 Oct: Automation work 09:30–17:30 added" in out["actions"]
+    assert list(day_plan.load_overrides()) == ["2026-10-14"]
+
+
+def test_tomorrow_fact_has_the_gym_slot():
+    _seed_day()
+    assert ec.today_checkin(at(21))["facts"]["tomorrow"]["gym_slot"] == ledger.DEFAULT_GYM_SLOT
+
+
+def test_schedule_route(monkeypatch, tmp_path):
+    import day_plan
+    monkeypatch.setattr(agent_api, "AUDIT_FILE", tmp_path / "audit.jsonl")
+    monkeypatch.setattr(ledger, "now_local", lambda: at(9, 44))
+    replans = []
+    monkeypatch.setattr(day_plan, "replan_today", lambda **kw: replans.append(1) or [
+        {"start": "2026-10-13T17:45", "title": "Lecture · MATH2931", "task": "Watch W5 lecture 1 (Tue 11:00)"}])
+    c = _client()
+    body = {"date": "2026-10-13", "add": [{"start": "09:30", "end": "17:30", "label": "Automation work"}],
+            "reason": "work moved from Monday"}
+
+    # Not planned yet: stored, no re-plan.
+    r = c.post("/schedule", headers=_auth(COACH), json=body)
+    assert r.status_code == 200 and r.get_json()["replanned"] is False
+
+    ledger.update_day(TUE, lambda d: d.update(planned="2026-10-13T05:30:00+11:00"))
+    r = c.post("/schedule", headers=_auth(COACH), json=body)
+    assert r.get_json()["replanned"] is True and r.get_json()["blocks"][0]["start"] == "17:45"
+    assert replans == [1]
+
+    assert c.post("/schedule", headers=_auth(COACH), json={**body, "date": "2026-10-01"}).status_code == 400
+    assert c.post("/schedule", headers=_auth(COACH), json={"date": "2026-10-14"}).status_code == 400
+    assert c.post("/schedule", headers=_auth(CAREER), json=body).status_code == 403
+    got = c.get("/schedule", headers=_auth(COACH)).get_json()
+    assert got["changes"]["2026-10-13"]["add"][0]["label"] == "Automation work"

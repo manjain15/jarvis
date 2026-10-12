@@ -436,6 +436,14 @@ def _gym_fact(day, now):
             "early": bool(gym.get("early"))}
 
 
+def _tomorrow_slot():
+    """Tomorrow's default gym slot (the 05:30 plan may move it if the calendar clashes)."""
+    try:
+        return _ledger().DEFAULT_GYM_SLOT
+    except Exception:
+        return None
+
+
 def checkin_questions(day, area_list, now):
     """The questions the evidence can't answer, in the order the bot should ask."""
     questions = []
@@ -498,7 +506,7 @@ def today_checkin(now=None):
         "area_block": next(({"area": i["area"], "task": i["task"], "status": i.get("status")}
                             for i in day.get("items", []) if i.get("kind") == "area"), None),
         "debt": day.get("debt"),
-        "tomorrow": {"split": get_tomorrow_pplrul(), "classes": tomorrow},
+        "tomorrow": {"split": get_tomorrow_pplrul(), "gym_slot": _tomorrow_slot(), "classes": tomorrow},
         "areas": area_summary,
     }
     return {"date": day["date"], "submitted": bool(day.get("checkin")),
@@ -559,16 +567,32 @@ def _keepup(date):
     return out
 
 
-def plan_actions(facts, answers, notes):
+def _routine_text():
+    try:
+        import term_context
+        return json.dumps(term_context.get_study_plan().get("routine", {}))
+    except Exception:
+        return "{}"
+
+
+def plan_actions(facts, answers, notes, today=None):
     """
-    One Claude call: tomorrow's handoff summary and area next actions, as
-    {"summary": str, "areas": {name: {"next_action": str, "worked_today": bool}}}.
+    One Claude call: tomorrow's handoff summary, area next actions and any
+    one-off schedule changes he mentioned, as
+    {"summary": str, "areas": {name: {"next_action", "worked_today"}},
+     "schedule_changes": [{"date", "add": [...], "remove": [...]}]}.
     Returns None when Claude isn't reachable; the caller falls back.
     """
     from voice import VOICE_RULES, strip_emoji
+    today = today or now_sydney().date()
+    tomorrow = today + datetime.timedelta(days=1)
     prompt = f"""{VOICE_RULES}
 
-Manav just finished his evening check-in. Facts from Jarvis's data and his answers are below.
+Manav just finished his evening check-in. Today is {today:%A %Y-%m-%d}; tomorrow is
+{tomorrow:%A %Y-%m-%d}. Facts from Jarvis's data and his answers are below.
+
+HIS WEEKLY ROUTINE (fixed commitments by weekday):
+{_routine_text()}
 
 FACTS:
 {json.dumps(facts, default=str)[:6000]}
@@ -579,12 +603,17 @@ ANSWERS (question id → answer):
 NOTES:
 {notes or "none"}
 
-Return only JSON with two keys.
+Return only JSON with three keys.
 "summary": under 120 words, a handoff note for tomorrow morning's brief: what happened
 today, what carries forward, and tomorrow's one non-negotiable.
 "areas": for each area mentioned in an "area:<name>" answer or in the notes, an object
 {{"next_action": one concrete step that fits a 45-minute block, under 80 characters,
   "worked_today": true only if he says he worked on it today}}. Leave out areas he didn't mention.
+"schedule_changes": a list of one-off changes to his routine or availability that he states,
+for today or a later date within 14 days. Each is {{"date": "YYYY-MM-DD",
+"add": [{{"start": "HH:MM", "end": "HH:MM", "label": "..."}}], "remove": ["<routine label>"]}}.
+A moved commitment is a remove on the old date and an add on the new one, keeping the routine's
+times unless he gives new ones. Only include changes he actually said. Usually this is [].
 """
     try:
         client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
@@ -595,7 +624,8 @@ today, what carries forward, and tomorrow's one non-negotiable.
     except Exception as e:
         print(f"⚠️  check-in: action planning failed: {e}")
         return None
-    out = {"summary": strip_emoji(str(data.get("summary") or ""))[:1200], "areas": {}}
+    out = {"summary": strip_emoji(str(data.get("summary") or ""))[:1200], "areas": {},
+           "schedule_changes": [c for c in (data.get("schedule_changes") or []) if isinstance(c, dict)]}
     for name, action in (data.get("areas") or {}).items():
         if isinstance(action, dict) and str(action.get("next_action") or "").strip():
             out["areas"][name] = {"next_action": strip_emoji(str(action["next_action"]))[:120],
@@ -619,6 +649,28 @@ def _fallback_summary(facts, answers):
     if answers.get("tomorrow_focus"):
         lines += ["TOMORROW CONTEXT:", f"  One non-negotiable: {answers['tomorrow_focus']}"]
     return "\n".join(lines)
+
+
+def _apply_schedule_changes(changes, today):
+    """Store valid schedule changes from the check-in. Returns readable action lines."""
+    lines = []
+    try:
+        import day_plan
+    except Exception:
+        return lines
+    for change in changes[:5]:
+        try:
+            date = datetime.date.fromisoformat(str(change.get("date")))
+            if not today <= date <= today + datetime.timedelta(days=14):
+                continue
+            stored = day_plan.set_override(date, {k: change[k] for k in ("add", "remove") if k in change})
+        except Exception as e:
+            print(f"⚠️  check-in: skipped schedule change {change}: {e}")
+            continue
+        parts = [f"{a['label']} {a['start']}–{a['end']} added" for a in change.get("add") or []]
+        parts += [f"{r} removed" for r in change.get("remove") or []]
+        lines.append(f"Schedule {date:%a %-d %b}: " + ", ".join(parts))
+    return lines
 
 
 def submit_checkin(body, now=None, actions_fn=None):
@@ -650,6 +702,7 @@ def submit_checkin(body, now=None, actions_fn=None):
             lines.append(f"Tomorrow's plan carries: {text}")
 
     planned = actions_fn(facts, answers, notes)
+    lines += _apply_schedule_changes((planned or {}).get("schedule_changes") or [], now.date())
     summary = (planned or {}).get("summary") or _fallback_summary(facts, answers)
 
     try:
