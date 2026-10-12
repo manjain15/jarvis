@@ -414,6 +414,8 @@ Rules:
 - Each task fits its block's minutes. Specific and checkable: "Assignment 2 Q1-3", "W5 lecture 2 + notes", not "study".
 - Unfinished tasks carried from yesterday go first, in the first block for that course.
 - Lecture blocks are for watching recorded lectures for the current week or catching up.
+- Study blocks are never lectures. They are problem sets, tutorial questions, assignment
+  work or revision for that course. If an assessment is listed, prefer work toward it.
 - No emoji. Under 60 characters each.
 
 BLOCKS:
