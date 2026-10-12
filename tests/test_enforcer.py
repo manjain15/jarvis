@@ -226,7 +226,7 @@ def test_miss_creates_a_makeup_cleared_by_a_rest_day_session():
     assert gym()["status"] == "missed"
     assert debt(MONDAY)["makeup"]["minutes"] == 55
 
-    # Tuesday carries it. A 45-min rest-day session clears it (55 − 15 slack).
+    # Tuesday carries it. A 45-min rest-day session clears it (55 − 10 slack).
     ledger.get_or_create_day(TUESDAY)
     assert enforcer.tick(at(23, 0, TUESDAY), fetch=lambda d: 45) == ["Make-up done · 45 min. Cleared."]
     assert debt(TUESDAY)["makeup"] is None
@@ -346,3 +346,13 @@ def test_no_early_credit_after_a_training_day(monkeypatch):
     ledger.update_day(SUNDAY, lambda d: d.update(closed=True))  # already settled
     out = enforcer.tick(at(6, 45), fetch=lambda d: (_ for _ in ()).throw(AssertionError("no hevy")))
     assert out == ["06:45 · Pull · leave by 07:05\nReply up."]
+
+
+def test_done_line_is_target_minus_ten():
+    gym = {"minutes": 45}
+    assert enforcer._grade(gym, 35) == "done"
+    assert enforcer._grade(gym, 34) == "partial"
+    assert enforcer._grade(gym, 25) == "partial"
+    assert enforcer._grade(gym, 24) is None
+    assert enforcer._grade({"minutes": 35}, 25) == "done"   # packed-day short version
+    assert enforcer._grade({"minutes": 65}, 54) == "partial"  # 45 + 20 debt
