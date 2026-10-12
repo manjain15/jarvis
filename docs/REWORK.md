@@ -57,15 +57,32 @@ way `term_context` writes.
 
 ## 4. Building the day (05:30)
 
-New timer `jarvis-plan` at 05:30. It builds today's ledger from:
+`day_plan.py`, run from the Telegram daemon's loop at 05:30, with retries
+every 30 min until noon. It runs in the daemon rather than on a new systemd
+timer, so there's no unit to install. The plan is built from:
 
-- **Gym**: the split label (`get_pplrul_day`), with a slot picked from the calendar's first free 75 min after 06:30. Default 06:30 (`JARVIS_GYM_SLOT`), 5 min travel (`JARVIS_GYM_TRAVEL_MIN`), so leave by 06:25.
-- **Steps**: 10,000 + carried step debt, capped at +3,000.
-- **Study blocks**: weighted by assessment proximity (`study_tracker`), this week's topics (`course_schedule`), weekly per-course hour targets (new, in `term_context.json`), and free calendar gaps (`uni_timetable` + Google Calendar). Written to Google Calendar as `Study · MATH2931` with a private extended property `jarvis=1`, so Jarvis can find and update its own events. No `[Jarvis]` prefix.
-- **One area push**: the most neglected area (see §8).
+- **Config**: `term_context.json → study_plan`:
+  - `targets`: hours per week per course, study and lectures.
+  - `routine`: work and travel the calendar doesn't know about.
+  - `daily_cap_hours`.
+  - `ignore_busy`: `["Lecture"]`, because lectures are watched as recordings.
+- **Gym**: 06:30 is kept unless the calendar clashes. Otherwise the session moves to the first clear 15-min step, up to 20:00.
+- **Sizing**:
+  - Remaining time = weekly target + last week's lecture backlog − done (partial counts as half).
+  - That's spread over the days left in proportion to each day's cap.
+  - Lectures × 1.5 (front-loaded).
+  - Study × 1.5 inside an assessment's lead window, × 2 within 3 days.
+  - Never over the day's cap.
+- **Blocks**: 60 or 90 min, 08:00–21:00, 15 min clear of anything busy, lectures first, courses interleaved.
+- **Calendar**: written as `Study · MATH2931` / `Lecture · MATH2931`, tagged `jarvis=study`. A re-plan only deletes tagged events.
+- **Tasks**: one Claude call writes a concrete task per block. Yesterday's unfinished tasks go first. If the call fails, the tasks fall back to plain text.
 
-One Claude call picks the study tasks and the area push. Everything else is
-deterministic.
+At each block's end, Telegram asks: `MATH2931 · Assignment 2 Q1-3. Done? done / partial / no`.
+- One question at a time.
+- No reply in 60 min counts as `no_reply`.
+- Anything not done rolls into tomorrow's tasks.
+
+`python day_plan.py --dry-run` prints today's plan and writes nothing.
 
 ## 5. Gym — wake sequence
 

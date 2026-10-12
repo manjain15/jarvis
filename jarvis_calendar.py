@@ -105,11 +105,22 @@ def get_today_events():
     return sorted(events, key=lambda x: x["start"])
 
 
-def get_busy_periods():
+JARVIS_TAG = "jarvis"  # private extended property on events Jarvis creates
+
+
+def get_busy_periods(include_jarvis=True, ignore_words=()):
     """
     Today's timed calendar events and UNSW classes as sorted (start, end)
     tz-aware tuples. All-day events are skipped. The timetable is optional.
+    include_jarvis=False leaves out Jarvis's own study blocks.
+    ignore_words skips events whose title contains any of them (case-
+    insensitive), e.g. "Lecture" when lectures are watched as recordings.
     """
+    ignore = [w.lower() for w in ignore_words]
+
+    def _skip(title):
+        return any(w in (title or "").lower() for w in ignore)
+
     tz    = TIMEZONE
     today = datetime.datetime.now(tz).date()
     start = datetime.datetime.combine(today, datetime.time.min).astimezone(tz)
@@ -126,15 +137,48 @@ def get_busy_periods():
     busy = []
     for e in result.get("items", []):
         s, f = e.get("start", {}), e.get("end", {})
+        tagged = (e.get("extendedProperties", {}).get("private", {}).get(JARVIS_TAG))
+        if (tagged and not include_jarvis) or _skip(e.get("summary")):
+            continue
         if "dateTime" in s and "dateTime" in f:
             busy.append((datetime.datetime.fromisoformat(s["dateTime"]).astimezone(tz),
                          datetime.datetime.fromisoformat(f["dateTime"]).astimezone(tz)))
     try:
         import uni_timetable
-        busy.extend(uni_timetable.get_busy_blocks())
+        busy.extend((c["start"], c["end"]) for c in uni_timetable.get_today_events()
+                    if c["time"] != "All day" and not _skip(c["title"]))
     except Exception:
         pass
     return sorted(busy)
+
+
+def create_tagged_event(title, start_dt, end_dt, description, kind, date_str):
+    """
+    Create an event Jarvis owns, tagged so it can find, update or delete it
+    later without touching anything else. Returns the event id.
+    """
+    event = {
+        "summary": title,
+        "description": description,
+        "start": {"dateTime": start_dt.isoformat(), "timeZone": config.TIMEZONE},
+        "end":   {"dateTime": end_dt.isoformat(), "timeZone": config.TIMEZONE},
+        "colorId": "8",
+        "reminders": {"useDefault": False},
+        "extendedProperties": {"private": {JARVIS_TAG: kind, "jarvis_date": date_str}},
+    }
+    result = get_calendar_service().events().insert(calendarId="primary", body=event).execute()
+    return result["id"]
+
+
+def list_tagged_events(kind, date_str):
+    """Ids of Jarvis-owned events of kind for date_str (YYYY-MM-DD)."""
+    result = get_calendar_service().events().list(
+        calendarId="primary",
+        privateExtendedProperty=[f"{JARVIS_TAG}={kind}", f"jarvis_date={date_str}"],
+        singleEvents=True,
+        maxResults=50,
+    ).execute()
+    return [e["id"] for e in result.get("items", [])]
 
 
 def get_free_blocks(min_duration_mins=45):
