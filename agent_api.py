@@ -90,7 +90,7 @@ BOT_ROUTE_ALLOWLIST = {
     "career": ("/health", "/flags", "/context", "/mentor", "/internships", "/today", "/areas"),
     "study": ("/health", "/flags", "/context", "/today"),
     "money": ("/health", "/finance", "/spend", "/flags", "/today"),
-    "coach": ("/health", "/flags", "/context", "/today", "/checkin", "/areas"),
+    "coach": ("/health", "/flags", "/context", "/today", "/checkin", "/areas", "/schedule"),
     # iOS Shortcuts: wake, gym arrival, steps, sleep. Write-only.
     "phone": ("/health", "/events"),
 }
@@ -691,6 +691,49 @@ def apply_checkin(body):
     """Save the coach's check-in answers. Raises ValueError on a bad body."""
     from evening_checkin import submit_checkin
     return submit_checkin(body)
+
+
+SCHEDULE_DAYS_AHEAD = 60
+
+
+def apply_schedule_change(body):
+    """
+    POST /schedule: a one-off change to one day's routine. A change for today
+    re-plans the rest of today. Raises ValueError on a bad body.
+    """
+    import day_plan
+    import ledger
+    if not isinstance(body, dict):
+        raise ValueError("JSON object required")
+    extra = sorted(set(body) - {"date", "add", "remove", "reason", "actor"})
+    if extra:
+        raise ValueError(f"unknown field(s): {', '.join(extra)}")
+    try:
+        date = datetime.date.fromisoformat(str(body.get("date")))
+    except ValueError:
+        raise ValueError("date must be YYYY-MM-DD")
+    today = ledger.now_local().date()
+    if not today <= date <= today + datetime.timedelta(days=SCHEDULE_DAYS_AHEAD):
+        raise ValueError(f"date must be today or within {SCHEDULE_DAYS_AHEAD} days")
+    change = {k: body[k] for k in ("add", "remove") if k in body}
+    stored = day_plan.set_override(date, change)
+    append_external_audit(_audit_entry(_actor_var.get() or OWNER_ACTOR, "schedule", date.isoformat(),
+                                       body.get("reason"), None, change))
+    result = {"ok": True, "date": date.isoformat(), "change": stored, "replanned": False}
+    if date == today and (ledger.load_day(today) or {}).get("planned"):
+        items = day_plan.replan_today()
+        result.update(replanned=True, blocks=[
+            {"start": i["start"][11:16], "title": i["title"], "task": i["task"]} for i in items])
+    return result
+
+
+def get_schedule_payload():
+    """Stored one-off changes from today on, plus the weekly routine."""
+    import day_plan
+    import ledger
+    today = ledger.now_local().date().isoformat()
+    changes = {d: c for d, c in day_plan.load_overrides().items() if d >= today}
+    return {"routine": day_plan.load_study_plan().get("routine", {}), "changes": changes}
 
 
 def get_areas_payload():
@@ -1643,6 +1686,27 @@ def create_app(token=None, bot_tokens=None):
         except Exception as e:
             print(f"⚠️  /checkin failed: {e}")
             return jsonify({"error": "check-in failed"}), 500
+
+    @app.post("/schedule")
+    def schedule_post():
+        """One-off routine change for a date: {"date", "add": [{start, end, label}], "remove": [label]}."""
+        body = request.get_json(silent=True)
+        try:
+            return jsonify(apply_schedule_change(body))
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        except Exception as e:
+            print(f"⚠️  /schedule failed: {e}")
+            return jsonify({"error": "schedule change failed"}), 500
+
+    @app.get("/schedule")
+    def schedule_get():
+        """The weekly routine and upcoming one-off changes."""
+        try:
+            return jsonify(get_schedule_payload())
+        except Exception as e:
+            print(f"⚠️  /schedule failed: {e}")
+            return jsonify({"error": "schedule failed"}), 500
 
     @app.get("/areas")
     def areas_get():

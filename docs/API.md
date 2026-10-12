@@ -55,7 +55,7 @@ can call):
 | `career` | `/health`, `/flags`, `/context`, `/mentor`, `/internships`, `/today`, `/areas` |
 | `study` | `/health`, `/flags`, `/context`, `/today` |
 | `money` | `/health`, `/flags`, `/spend`, `/finance` and `/finance/*`, `/today` |
-| `coach` | `/health`, `/flags`, `/context`, `/today`, `/checkin`, `/areas` |
+| `coach` | `/health`, `/flags`, `/context`, `/today`, `/checkin`, `/areas`, `/schedule` |
 | `phone` | `/health`, `/events` |
 | `owner` (`JARVIS_API_TOKEN`) | every route |
 
@@ -398,6 +398,20 @@ Unknown ids are 400. A blank or `skip` answer is dropped. `weight` must be
 - writes `data/checkin_<date>.json` and `data/summary_<date>.txt`
 
 It returns `{"ok", "date", "summary", "actions"}`.
+
+### Schedule changes
+
+`POST /schedule` (coach) takes `{"date", "add": [{"start", "end", "label"}],
+"remove": ["<routine label>"], "reason"}` for today or up to 60 days ahead.
+- Adds block extra time.
+- Removes drop routine entries whose label contains the text.
+- The change is stored in `data/schedule_overrides.json` and audited.
+- A change for today re-plans the rest of today: blocks that have started or
+  been answered stay, and only Jarvis's future calendar events are replaced.
+  The response then has `"replanned": true` and the new `blocks`.
+
+`GET /schedule` returns the weekly routine and the upcoming changes. The
+evening check-in also stores changes Manav mentions ("work moved to tomorrow").
 
 ### Areas
 

@@ -49,8 +49,22 @@ def store(tmp_path, monkeypatch):
     monkeypatch.setattr(day_plan, "ANTHROPIC_AVAILABLE", False)
     monkeypatch.setattr(day_plan, "_last_attempt", {})
     monkeypatch.setattr(day_plan, "area_pick", lambda date: None)  # area tests pass area_fn
+    monkeypatch.setattr(day_plan, "timetable_lectures", fake_lectures)
     import term_context
     monkeypatch.setattr(term_context, "get_workout_schedule", lambda: dict(term_context.DEFAULT_WORKOUT_SCHEDULE))
+
+
+# The real T3 pattern: COMP3121 Mon + Thu 14-16, MATH2931 Tue + Thu 11-13.
+LECTURES = {"COMP3121": ((0, 14), (3, 14)), "MATH2931": ((1, 11), (3, 11))}
+
+
+def fake_lectures(code, start, end):
+    out = []
+    for weekday, hour in LECTURES.get(code, ()):
+        day = start + datetime.timedelta(days=(weekday - start.weekday()) % 7)
+        if start <= day <= end:
+            out.append((at(hour, 0, day), at(hour + 2, 0, day)))
+    return sorted(out)
 
 
 def at(hour, minute=0, date=TUESDAY):
@@ -68,9 +82,12 @@ class FakeCalendar:
     def delete_all(self, date_str):
         self.deleted.append(date_str)
 
+    def delete(self, event_id):
+        self.deleted.append(event_id)
 
-def plain(placed, context, carry):
-    return day_plan.write_tasks(placed, context, carry)
+
+def plain(placed, context, carry, labels=None):
+    return day_plan.write_tasks(placed, context, carry, labels)
 
 
 # ── Sizing ───────────────────────────────────────────────────────────────────
@@ -402,8 +419,10 @@ def test_area_block_follows_the_study_blocks_outside_the_cap(monkeypatch):
     assert sum(i["minutes"] for i in study) <= 240
     assert len(area) == 1 and area[0]["minutes"] == 45
     assert area[0]["title"] == "Passion project" and area[0]["task"] == "Write the one-page concept"
-    last_study_end = max(datetime.datetime.fromisoformat(i["end"]) for i in study)
-    assert datetime.datetime.fromisoformat(area[0]["start"]) >= last_study_end
+    a_start = datetime.datetime.fromisoformat(area[0]["start"])
+    a_end = datetime.datetime.fromisoformat(area[0]["end"])
+    for i in study:   # fits a free gap without overlapping any study block
+        assert a_end <= datetime.datetime.fromisoformat(i["start"]) or a_start >= datetime.datetime.fromisoformat(i["end"])
     stored = [i for i in ledger.load_day(TUESDAY)["items"] if i.get("kind") == "area"]
     assert len(stored) == 1
 
@@ -433,3 +452,115 @@ def test_check_in_leftover_replaces_the_task():
         {"kind": "study", "course": "MATH2931", "type": "study", "task": "W5 tutorial Q1-6",
          "left": "Q5-6", "minutes": 60, "status": "partial"}))
     assert day_plan.leftovers(TUESDAY) == [("MATH2931", "study", "Q5-6", "partial")]
+
+
+# ── Lecture recordings ───────────────────────────────────────────────────────
+
+def _lecture_items(items, course=None):
+    return [i for i in items if i["kind"] == "study" and i["type"] == "lecture"
+            and (course is None or i["course"] == course)]
+
+
+def test_lecture_blocks_wait_for_the_lecture():
+    items = day_plan.build_plan(now=at(5, 30), busy_fn=lambda: [], tasks_fn=plain, calendar=FakeCalendar())
+    math = _lecture_items(items, "MATH2931")
+    comp = _lecture_items(items, "COMP3121")
+    # MATH2931's Tuesday lecture ends 13:00; COMP3121's Monday one is already out.
+    assert math and all(datetime.datetime.fromisoformat(i["start"]) >= at(13) for i in math)
+    assert comp and datetime.datetime.fromisoformat(comp[0]["start"]) < at(13)
+    # Only Monday's 2h COMP3121 lecture exists so far; Thursday's isn't planned.
+    assert sum(i["minutes"] for i in comp) <= 120
+
+
+def test_lecture_tasks_name_the_lecture():
+    items = day_plan.build_plan(now=at(5, 30), busy_fn=lambda: [], tasks_fn=plain, calendar=FakeCalendar())
+    tasks = {i["course"]: i["task"] for i in _lecture_items(items)}
+    assert tasks["COMP3121"] == "Watch W5 lecture 1 (Mon 14:00)"
+    assert tasks["MATH2931"] == "Watch W5 lecture 1 (Tue 11:00)"
+
+
+def test_no_lecture_blocks_before_any_lecture_has_happened():
+    sunday = TUESDAY - datetime.timedelta(days=2)
+    items = day_plan.build_plan(now=at(5, 30, sunday), busy_fn=lambda: [], tasks_fn=plain, calendar=FakeCalendar())
+    assert _lecture_items(items) == []
+
+
+def test_watched_lectures_use_up_the_supply():
+    ledger.update_day(MONDAY, lambda d: d["items"].append(
+        {"kind": "study", "course": "COMP3121", "type": "lecture", "minutes": 120, "status": "done"}))
+    items = day_plan.build_plan(now=at(5, 30), busy_fn=lambda: [], tasks_fn=plain, calendar=FakeCalendar())
+    assert _lecture_items(items, "COMP3121") == []
+
+
+def test_unreadable_timetable_falls_back_to_unconstrained(monkeypatch):
+    def broken(code, start, end):
+        raise RuntimeError("feed down")
+    monkeypatch.setattr(day_plan, "timetable_lectures", broken)
+    assert day_plan.lecture_supply(TUESDAY, PLAN["targets"]) is None
+
+
+def test_study_tasks_that_are_lecture_watching_are_replaced(monkeypatch):
+    monkeypatch.setattr(day_plan, "ANTHROPIC_AVAILABLE", True)
+
+    class Msg:
+        content = [type("B", (), {"text": '["Watch W5 lecture 2", "Finish Q5-6"]'})()]
+
+    class Client:
+        def __init__(self, **kw):
+            self.messages = self
+
+        def create(self, **kw):
+            return Msg()
+
+    monkeypatch.setattr(day_plan.anthropic, "Anthropic", Client)
+    placed = [("COMP3121", "study", at(9), at(10)), ("MATH2931", "study", at(10, 15), at(11, 15))]
+    tasks = day_plan.write_tasks(placed, {"COMP3121": {"week": 5, "notes": []}, "MATH2931": {"week": 5, "notes": []}}, [])
+    assert tasks == ["W5 problems", "Finish Q5-6"]
+
+
+# ── Schedule changes and re-planning ─────────────────────────────────────────
+
+def test_override_moves_the_routine():
+    day_plan.set_override(MONDAY, {"remove": ["Automation work"]})
+    day_plan.set_override(TUESDAY, {"add": [{"start": "09:30", "end": "17:30", "label": "Automation work"}]})
+    plan = dict(PLAN, routine={"Monday": [{"start": "09:30", "end": "17:30", "label": "Automation work"}]})
+    assert day_plan.routine_busy(plan, MONDAY) == []
+    assert day_plan.routine_busy(plan, TUESDAY) == [(at(9, 30), at(17, 30))]
+
+
+@pytest.mark.parametrize("change", [
+    {}, [], {"add": [{"start": "9am", "end": "17:00"}]}, {"add": [{"start": "17:00", "end": "09:00"}]},
+    {"remove": [""]}, {"move": []}, {"add": [{"start": "09:00", "end": "10:00", "extra": 1}]},
+])
+def test_bad_changes(change):
+    with pytest.raises(ValueError):
+        day_plan.set_override(TUESDAY, change)
+
+
+def test_build_respects_an_override():
+    day_plan.set_override(TUESDAY, {"add": [{"start": "09:30", "end": "17:30", "label": "Automation work"}]})
+    items = day_plan.build_plan(now=at(5, 30), busy_fn=lambda: [], tasks_fn=plain, calendar=FakeCalendar())
+    for i in items:
+        start, end = datetime.datetime.fromisoformat(i["start"]), datetime.datetime.fromisoformat(i["end"])
+        assert end <= at(9, 15) or start >= at(17, 45)
+
+
+def test_replan_keeps_done_blocks_and_replaces_only_future_events():
+    cal = FakeCalendar()
+    first = day_plan.build_plan(now=at(5, 30), busy_fn=lambda: [], tasks_fn=plain, calendar=cal)
+    done_id = first[0]["id"]
+    ledger.update_day(TUESDAY, lambda d: ledger.find_item(d, done_id).update(status="done"))
+    future_events = [i["event_id"] for i in first if datetime.datetime.fromisoformat(i["start"]) > at(9, 44)]
+
+    day_plan.set_override(TUESDAY, {"add": [{"start": "09:30", "end": "17:30", "label": "Automation work"}]})
+    cal2 = FakeCalendar()
+    new = day_plan.replan_today(now=at(9, 44), busy_fn=lambda: [], tasks_fn=plain, calendar=cal2)
+
+    stored = [i for i in ledger.load_day(TUESDAY)["items"] if i.get("kind") in ("study", "area")]
+    assert ledger.find_item(ledger.load_day(TUESDAY), done_id)["status"] == "done"
+    assert cal2.deleted == future_events            # only the dropped future events
+    for i in new:
+        assert datetime.datetime.fromisoformat(i["start"]) >= at(17, 45)
+    assert len({i["id"] for i in stored}) == len(stored)
+    kept_minutes = sum(i["minutes"] for i in stored if i["kind"] == "study")
+    assert kept_minutes <= 240
