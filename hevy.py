@@ -164,35 +164,61 @@ def find_pbs(workout):
     return pbs
 
 
-def get_weekly_sessions(workouts):
-    """
-    Counts training sessions in the current week (Mon–Sun).
-    Returns (sessions_this_week, session_dates)
-    """
-    tz    = TIMEZONE
-    today = datetime.datetime.now(tz).date()
-    # Start of current week (Monday)
-    week_start = today - datetime.timedelta(days=today.weekday())
-
-    session_dates = []
-    for w in workouts:
-        dt = parse_workout_date(w)
-        if dt and dt.date() >= week_start:
-            session_dates.append(dt.date())
-
-    return len(session_dates), session_dates
-
-
 # ── PPLRUL helper ──────────────────────────────────────────────────────────────
 # Schedule itself now lives in term_context.json (single source of truth,
 # editable via proposals) instead of being hardcoded here.
 try:
     from term_context import get_pplrul_day, VALID_SPLIT_LABELS as _VALID_SPLIT_LABELS
+    from term_context import week_start as _week_start
     PPLRUL = sorted(_VALID_SPLIT_LABELS)  # kept for backward-compat imports elsewhere
 except Exception:
     PPLRUL = ["Push", "Pull", "Legs", "Rest", "Upper", "Sharms", "Rest"]
     def get_pplrul_day(date=None):
         return "Rest"
+
+    def _week_start(date=None):
+        date = date or datetime.datetime.now(TIMEZONE).date()
+        return date - datetime.timedelta(days=date.weekday())
+
+
+def assign_sessions(workouts, start, end, split_fn=None):
+    """
+    {scheduled date: workout} for training days in [start, end].
+
+    A workout counts for the day it was logged. A workout logged on a rest
+    day counts for the next day instead, when that is a training day with no
+    workout of its own: a Push done on Saturday night fills Sunday's Push.
+    """
+    split_fn = split_fn or get_pplrul_day
+    by_date = {}
+    for w in workouts or []:
+        dt = parse_workout_date(w)
+        if dt:
+            by_date.setdefault(dt.date(), w)
+    assigned = {}
+    day = start
+    while day <= end:
+        if split_fn(day) != "Rest":
+            if day in by_date:
+                assigned[day] = by_date[day]
+            else:
+                before = day - datetime.timedelta(days=1)
+                if before in by_date and split_fn(before) == "Rest":
+                    assigned[day] = by_date[before]
+        day += datetime.timedelta(days=1)
+    return assigned
+
+
+def get_weekly_sessions(workouts):
+    """
+    Counts training sessions in the current training week, which starts on
+    the first day of the workout schedule (Sunday by default).
+    Returns (sessions_this_week, session_dates)
+    """
+    tz    = TIMEZONE
+    today = datetime.datetime.now(tz).date()
+    assigned = assign_sessions(workouts, _week_start(today), today)
+    return len(assigned), sorted(assigned)
 
 
 # ── Main summary ──────────────────────────────────────────────────────────────
@@ -221,10 +247,9 @@ def fetch_workout_data():
     lines = []
 
     # ── Did they train yesterday? ─────────────────────────────────────────────
-    yesterday_workouts = [
-        w for w in workouts
-        if parse_workout_date(w) and parse_workout_date(w).date() == yesterday
-    ]
+    # A session done the evening before (on a rest day) counts for yesterday.
+    early = assign_sessions(workouts, yesterday, yesterday).get(yesterday)
+    yesterday_workouts = [early] if early else []
 
     is_rest_day = yesterday_split == "Rest"
 
@@ -246,35 +271,31 @@ def fetch_workout_data():
     # ── Weekly consistency ────────────────────────────────────────────────────
     sessions_this_week, session_dates = get_weekly_sessions(workouts)
 
-    # Expected sessions this week (non-rest days so far)
-    today_weekday = today.weekday()  # 0=Mon
-    week_start    = today - datetime.timedelta(days=today_weekday)
-    expected = 0
-    for i in range(today_weekday + 1):  # up to and including today
-        d = week_start + datetime.timedelta(days=i)
-        if get_pplrul_day(d) != "Rest":
-            expected += 1
+    # Expected sessions this training week (non-rest days so far)
+    week_start = _week_start(today)
+    days_so_far = (today - week_start).days + 1
+    expected = sum(1 for i in range(days_so_far)
+                   if get_pplrul_day(week_start + datetime.timedelta(days=i)) != "Rest")
 
     lines.append(f"THIS WEEK: {sessions_this_week}/{expected} sessions completed")
 
     # Show which days were trained
-    day_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
     week_display = []
-    now_hour = datetime.datetime.now(tz).hour
-    for i in range(today_weekday + 1):
+    for i in range(days_so_far):
         d        = week_start + datetime.timedelta(days=i)
+        name     = d.strftime("%a")
         split    = get_pplrul_day(d)
         trained  = d in session_dates
         rest     = split == "Rest"
         is_today = (d == today)
         if rest:
-            week_display.append(f"{day_names[i]}:Rest")
+            week_display.append(f"{name}:Rest")
         elif trained:
-            week_display.append(f"{day_names[i]}:✓")
+            week_display.append(f"{name}:✓")
         elif is_today:
-            week_display.append(f"{day_names[i]}:pending")  # haven't trained yet today
+            week_display.append(f"{name}:pending")  # haven't trained yet today
         else:
-            week_display.append(f"{day_names[i]}:✗")
+            week_display.append(f"{name}:✗")
 
     lines.append("  " + "  ".join(week_display))
     lines.append("")

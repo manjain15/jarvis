@@ -8,13 +8,14 @@ Calendar as Jarvis-tagged events, and asks at the end of each block whether
 it got done. See docs/REWORK.md §4.
 
 CONFIG (term_context.json → "study_plan", see term_context.get_study_plan):
-  targets           hours per ISO week per course, study and lectures
+  targets           hours per training week per course, study and lectures
   routine           weekly commitments the calendar doesn't know (work, travel)
   daily_cap_hours   most study a given weekday can take
   ignore_busy       title words that don't block time (["Lecture"]: recordings)
 
 SIZING:
   remaining = weekly target + last week's lecture backlog − done this week
+              (the week starts on the split's first day: Sunday by default)
   today     = remaining × today's cap / (today's cap + caps of the days left)
               lectures × 1.5 (watch before the problems that depend on them)
               study × 1.5 inside an assessment's lead window, × 2 within 3 days
@@ -158,8 +159,12 @@ def course_context(date, courses):
 # ── Sizing ───────────────────────────────────────────────────────────────────
 
 def week_start(date):
-    """Monday of date's ISO week."""
-    return date - datetime.timedelta(days=date.weekday())
+    """First day of date's training week (term_context.week_start; Sunday by default)."""
+    try:
+        from term_context import week_start as _week_start
+        return _week_start(date)
+    except Exception:
+        return date - datetime.timedelta(days=date.weekday())
 
 
 def _credit(item):
@@ -227,7 +232,9 @@ def allocate(remaining, date, caps, boosts):
     today_cap = caps.get(WEEKDAYS[date.weekday()], 0) * 60
     if today_cap <= 0 or not remaining:
         return {}
-    later = sum(caps.get(WEEKDAYS[d], 0) * 60 for d in range(date.weekday() + 1, 7))
+    days_left = 6 - (date - week_start(date)).days
+    later = sum(caps.get(WEEKDAYS[(date + datetime.timedelta(days=i)).weekday()], 0) * 60
+                for i in range(1, days_left + 1))
     share = today_cap / (today_cap + later)
 
     lectures, study = {}, {}

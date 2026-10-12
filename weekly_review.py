@@ -81,15 +81,24 @@ def get_google_credentials():
 
 # ── Data aggregation ──────────────────────────────────────────────────────────
 
+def review_window(today):
+    """
+    (start, end) of the last complete training week before today. The week
+    starts on the split's first day (term_context.week_start, Sunday by
+    default), so a Sunday-morning run covers Sunday to Saturday, ending
+    yesterday, and a Saturday-night session lands in the week it belongs to.
+    """
+    try:
+        from term_context import week_start
+        this_week = week_start(today)
+    except Exception:
+        this_week = today - datetime.timedelta(days=today.weekday())
+    return this_week - datetime.timedelta(days=7), this_week - datetime.timedelta(days=1)
+
+
 def get_week_dates():
-    """Returns the start and end of the current week (Mon-Sun)."""
-    tz    = TIMEZONE
-    today = datetime.datetime.now(tz).date()
-    # This Monday
-    days_since_monday = today.weekday()
-    week_start = today - datetime.timedelta(days=days_since_monday)
-    week_end   = week_start + datetime.timedelta(days=6)
-    return week_start, week_end
+    """The review window for today: see review_window."""
+    return review_window(datetime.datetime.now(TIMEZONE).date())
 
 
 def collect_health_data(week_start, week_end):
@@ -160,11 +169,11 @@ def collect_workout_data(week_start, week_end):
     try:
         from hevy import fetch_recent_workouts, parse_workout_date, get_pplrul_day, find_pbs, PPLRUL
 
-        workouts = fetch_recent_workouts(page_size=10)
-        week_workouts = [
-            w for w in workouts
-            if parse_workout_date(w) and week_start <= parse_workout_date(w).date() <= week_end
-        ]
+        from hevy import assign_sessions
+        workouts = fetch_recent_workouts(page_size=10) or []
+        # A rest-day session the evening before counts for the next training day.
+        assigned = assign_sessions(workouts, week_start, week_end)
+        week_workouts = list(assigned.values())
 
         # Expected sessions this week
         expected_days = []
@@ -174,8 +183,8 @@ def collect_workout_data(week_start, week_end):
             if split != "Rest":
                 expected_days.append((d, split))
 
-        trained_dates = {parse_workout_date(w).date() for w in week_workouts}
-        sessions_done = len(week_workouts)
+        trained_dates = set(assigned)
+        sessions_done = len(assigned)
 
         lines.append(f"  Sessions: {sessions_done}/{len(expected_days)} completed")
 
@@ -581,32 +590,36 @@ def send_weekly_review(html_body, text_body, subject):
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
+def _term_week(ctx, date):
+    """Term week number containing date (term weeks count from the term's start date)."""
+    try:
+        start = datetime.date.fromisoformat(ctx["term"]["start_date"])
+    except Exception:
+        return None
+    return (date - start).days // 7 + 1 if date >= start else 0
+
+
 def build_review_sections(today, note):
-    """(title, meta, sections) for the week ending yesterday (the review runs Sunday morning)."""
-    week_start = today - datetime.timedelta(days=today.weekday())
-    monday_run = today.weekday() == 0
-    if monday_run:
-        week_start -= datetime.timedelta(days=7)  # run on a Monday: review the week just gone
-    days = week_days(week_start, today)
+    """(title, meta, sections) for the last complete training week (see review_window)."""
+    week_start, last = review_window(today)
+    days = week_days(week_start, last + datetime.timedelta(days=1))
 
     import term_context
     ctx = term_context.load_context()
-    week = term_context.current_term_week(ctx)
-    if week and monday_run:
-        week -= 1  # current_term_week counts today; the reviewed week is the one before
+    week = _term_week(ctx, last)
     plan = term_context.get_study_plan()
     targets = {c: t for c, t in plan.get("targets", {}).items() if t.get("study") or t.get("lectures")}
 
     try:
         import day_plan
-        done = day_plan.minutes_done(week_start, today)
+        done = day_plan.minutes_done(week_start, last + datetime.timedelta(days=1))
     except Exception:
         done = {}
     planned_days = sum(1 for _d, day in days if (day or {}).get("planned"))
 
     try:
         from agent_api import get_spending_payload, get_savings_payload
-        spending = get_spending_payload(week_start, today - datetime.timedelta(days=1))
+        spending = get_spending_payload(week_start, last)
         savings = get_savings_payload()
     except Exception as e:
         print(f"⚠️   Finance unavailable for the review: {e}")
@@ -639,7 +652,6 @@ def build_review_sections(today, note):
         {"label": "Next week", "rows": [{"text": p} for p in note.get("priorities", [])]},
         {"label": "Upkeep", "rows": UPKEEP_ROWS},
     ]
-    last = today - datetime.timedelta(days=1)
     title = f"Week {week} review" if week else "Weekly review"
     meta = f"{week_start:%-d %b} – {last:%-d %b} · {ctx.get('term', {}).get('name', '')}".strip(" ·")
     return title, meta, sections

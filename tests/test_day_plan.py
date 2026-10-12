@@ -48,6 +48,8 @@ def store(tmp_path, monkeypatch):
     monkeypatch.setattr(day_plan, "course_context", lambda date, courses: {c: {"week": 5, "notes": []} for c in courses})
     monkeypatch.setattr(day_plan, "ANTHROPIC_AVAILABLE", False)
     monkeypatch.setattr(day_plan, "_last_attempt", {})
+    import term_context
+    monkeypatch.setattr(term_context, "get_workout_schedule", lambda: dict(term_context.DEFAULT_WORKOUT_SCHEDULE))
 
 
 def at(hour, minute=0, date=TUESDAY):
@@ -117,10 +119,19 @@ def test_boost_shifts_time_to_the_course_with_an_assessment():
     assert boosted[("MATH2931", "study")] > plain_alloc[("MATH2931", "study")]
 
 
-def test_sunday_takes_everything_left_up_to_the_cap():
-    sunday = MONDAY + datetime.timedelta(days=6)
-    alloc = day_plan.allocate({("MATH2931", "study"): 120}, sunday, PLAN["daily_cap_hours"], {})
+def test_last_day_of_the_week_takes_everything_left_up_to_the_cap():
+    saturday = MONDAY + datetime.timedelta(days=5)   # the week runs Sunday to Saturday
+    alloc = day_plan.allocate({("MATH2931", "study"): 120}, saturday, PLAN["daily_cap_hours"], {})
     assert alloc == {("MATH2931", "study"): 120}
+
+
+def test_sunday_starts_a_new_week():
+    sunday = MONDAY + datetime.timedelta(days=6)
+    ledger.update_day(MONDAY, lambda d: d["items"].append(
+        {"kind": "study", "course": "MATH2931", "type": "study", "minutes": 120, "status": "done"}))
+    assert day_plan.remaining_minutes(sunday, PLAN["targets"])[("MATH2931", "study")] == 420
+    alloc = day_plan.allocate({("MATH2931", "study"): 420}, sunday, PLAN["daily_cap_hours"], {})
+    assert alloc[("MATH2931", "study")] < 420
 
 
 def test_zero_cap_day_gets_nothing():

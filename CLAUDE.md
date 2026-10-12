@@ -146,6 +146,12 @@ Never write outside `/Users/manavjain/jarvis/`.
   call writes the note + three priorities (JSON); the intelligence report's
   trends are context, not a second call. `python weekly_review.py --preview FILE`.
 
+- **Training week** starts on the workout schedule's first day (Sunday):
+  `term_context.week_start()` sets the boundary for day_plan targets, the weekly
+  review (last complete Sun–Sat week) and Hevy's "this week". A session logged on
+  a rest day counts for the next training day (`hevy.assign_sessions`; the
+  enforcer skips the morning sequence when it finds one).
+
 ## Git
 
 - Never include Co-Authored-By lines (or any AI attribution) in commit messages.

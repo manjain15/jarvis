@@ -26,6 +26,10 @@ EXCUSES ("skip <reason>"):
   < 75 min free          35-min version (once a day)
   anything else          rejected, sequence continues
 
+EARLY SESSIONS: a session logged on the rest day before a training day counts
+  for it (Push on Saturday night fills Sunday), unless it cleared a make-up.
+  Checked at slot − 30 min (or on wake); the sequence is then skipped.
+
 DEBT (settled when the day closes, 23:00):
   done      Hevy minutes >= target − 15. Clears gym_minutes debt.
   partial   >= 25 min. No new debt.
@@ -363,6 +367,7 @@ def _settle(day, minutes, now):
         if extra >= makeup["minutes"] - DONE_SLACK:
             out.append(f"Make-up done · {extra} min. Cleared.")
             debt["makeup"] = None
+            day["makeup_cleared"] = True  # this day's session is spent; no early credit
         elif date >= datetime.date.fromisoformat(makeup["due"]):
             debt["gym_minutes"] += EXPIRED_PENALTY
             debt["makeup"] = None
@@ -418,6 +423,46 @@ def _close(date, now, fetch):
     return out
 
 
+# ── Early sessions ───────────────────────────────────────────────────────────
+
+def _early_credit(today, now, fetch):
+    """
+    A session logged on the rest day before a training day counts for that
+    training day (a Push done Saturday night fills Sunday). Checked once,
+    from FALLBACK_LEAD before the slot, so the sequence never asks for a
+    session that's already done. A rest-day session that cleared a make-up
+    is not counted twice. Returns messages.
+    """
+    day = ledger.get_or_create_day(today)
+    gym = _active_gym(day)
+    if gym is None or (gym.get("seq") or {}).get("started") or gym.get("early_checked"):
+        return []
+    if now < slot_dt(day, gym, now) - datetime.timedelta(minutes=FALLBACK_LEAD) \
+            and day.get("woke_at") is None:
+        return []
+    yesterday = today - datetime.timedelta(days=1)
+    before = ledger.load_day(yesterday)
+    rest_before = before is None or ledger.find_item(before, "gym") is None
+    if not rest_before or (before or {}).get("makeup_cleared"):
+        ledger.update_day(today, lambda d: ledger.find_item(d, "gym").__setitem__("early_checked", True))
+        return []
+    minutes = fetch(yesterday)
+    if minutes is None:
+        return []  # Hevy unreachable; the next tick retries.
+
+    def _apply(d):
+        g = ledger.find_item(d, "gym")
+        g["early_checked"] = True
+        grade = _grade(g, minutes)
+        if grade is None or g.get("status") != "pending":
+            return None
+        g["status"], g["logged_minutes"], g["early"] = grade, minutes, True
+        _log(d, "early", now, minutes=minutes, status=grade)
+        return f"{g['title']} logged yesterday · {minutes} min. Nothing to do this morning."
+    msg = ledger.update_day(today, _apply)
+    return [msg] if msg else []
+
+
 # ── Entry points for the Telegram daemon ─────────────────────────────────────
 
 _last_close_attempt = {}
@@ -441,6 +486,8 @@ def tick(now=None, fetch=None):
         if stored is not None and not stored.get("closed"):
             _last_close_attempt[yesterday] = now
             out += _close(yesterday, now, fetch)
+
+    out += _early_credit(today, now, fetch)
 
     def _step(day):
         gym = _active_gym(day)

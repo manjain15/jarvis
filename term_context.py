@@ -204,6 +204,22 @@ def get_pplrul_day(date=None) -> str:
     return get_workout_schedule()[date.strftime("%A")]
 
 
+_WEEKDAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+
+def week_start(date=None) -> datetime.date:
+    """
+    First day of the training week containing date. The week starts on the
+    first day listed in the workout schedule (Sunday by default), so moving
+    where the split starts moves every weekly boundary with it: day_plan's
+    study targets, the weekly review, and Hevy's "this week" count.
+    """
+    date = date or datetime.datetime.now(TIMEZONE).date()
+    first = next(iter(get_workout_schedule()), "Monday")
+    offset = (date.weekday() - _WEEKDAY_NAMES.index(first)) % 7
+    return date - datetime.timedelta(days=offset)
+
+
 def update_workout_schedule(schedule: dict):
     """
     Overwrites the full 7-day workout schedule. `schedule` must map every
@@ -225,7 +241,7 @@ def update_workout_schedule(schedule: dict):
 # ── Study plan ────────────────────────────────────────────────────────────────
 # Weekly hour targets per course, fixed weekly commitments the calendar doesn't
 # know about (work, travel), and daily study caps. Read by day_plan.py.
-#   targets:  {"COMP3121": {"study": 8, "lectures": 4}, ...}   hours / ISO week
+#   targets:  {"COMP3121": {"study": 8, "lectures": 4}, ...}   hours / training week (week_start)
 #   routine:  {"Monday": [{"start": "09:30", "end": "17:30", "label": "Work"}], ...}
 #   daily_cap_hours: {"Monday": 1.5, ...}
 #   ignore_busy: ["Lecture"]   title words that don't block study time
