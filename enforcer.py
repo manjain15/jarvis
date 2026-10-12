@@ -31,7 +31,7 @@ EARLY SESSIONS: a session logged on the rest day before a training day counts
   Checked at slot − 30 min (or on wake); the sequence is then skipped.
 
 DEBT (settled when the day closes, 23:00):
-  done      Hevy minutes >= target − 15. Clears gym_minutes debt.
+  done      Hevy minutes >= target − 10 (35 for a 45-min session). Clears gym_minutes debt.
   partial   >= 25 min. No new debt.
   unenforced  the sequence never ran that day (before go-live, daemon down).
             No debt.
@@ -63,7 +63,7 @@ ARRIVAL_GRACE      = 30
 VERIFY_AFTER       = 120
 VERIFY_EVERY       = 30
 DAY_CLOSE          = datetime.time(23, 0)
-DONE_SLACK         = 15
+DONE_SLACK         = 10
 MIN_PARTIAL        = 25
 SHORT_MINUTES      = 35
 FULL_DAY_FREE      = 75

@@ -120,7 +120,7 @@ Telegram, on a gym day:
 
 **Minimum:** on a bad day the deal is "arrive and do the first exercise". A
 session of 25+ min in Hevy counts as `partial`, not missed. `done` is the
-target minus 15 minutes (30 min for a 45-min session). The packed-day
+target minus 10 minutes (35 min for a 45-min session). The packed-day
 short version stays 35 min.
 
 ## 6. Steps
@@ -160,13 +160,13 @@ Settled when the day closes (23:00, or on the next tick if the daemon was down).
 
 | Outcome | Rule | Debt |
 |---|---|---|
-| done | Hevy minutes ≥ target − 15 (30 when the target is 45) | clears `gym_minutes` |
+| done | Hevy minutes ≥ target − 10 (35 when the target is 45) | clears `gym_minutes` |
 | partial | ≥ 25 min and under the done line | none |
 | excused | `skip sick` | none, shown in the weekly review |
 | unenforced | the sequence never ran that day (before go-live, daemon down all morning) | none |
 | missed | anything else | a **make-up**: base minutes + 10 (55 on a normal day) within 2 days |
 
-- **Make-up**: an extra workout of the base target + 10. Either a rest-day session, or minutes beyond that day's target. It clears when the extra minutes are ≥ make-up − 15.
+- **Make-up**: an extra workout of the base target + 10. Either a rest-day session, or minutes beyond that day's target. It clears when the extra minutes are ≥ make-up − 10.
 - **Make-up not done by its due date**: +20 min on every gym session until one hits the longer target.
 - **A second miss while a make-up is owed**: +10 min on the next session.
 - **Steps**: a shortfall carries to the next day (cap +3,000). Built in phase 3.
