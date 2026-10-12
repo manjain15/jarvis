@@ -761,8 +761,10 @@ def cmd_done(args):
     name     = " ".join(args[1:])
     try:
         from term_context import mark_assessment_done
-        mark_assessment_done(subject, name)
-        return f"✅ Marked {subject} — {name} as submitted."
+        matched = mark_assessment_done(subject, name)
+        if not matched:
+            return f"⚠️ No {subject} assessment matching “{name}”. Nothing changed."
+        return f"✅ Marked {subject} — {matched} as submitted."
     except Exception as e:
         return f"⚠️ {e}"
 
@@ -960,10 +962,15 @@ COMMANDS = {
 }
 
 
+_SMART_QUOTES = str.maketrans({"“": '"', "”": '"', "‘": "'", "’": "'"})
+
+
 def handle_command(text):
     """Returns reply text if `text` is a known slash command, else None."""
     if not text.startswith("/"):
         return None
+    # iOS keyboards send curly quotes; shlex only groups straight ones.
+    text = text.translate(_SMART_QUOTES)
     try:
         parts = shlex.split(text)
     except ValueError:
