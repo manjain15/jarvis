@@ -3,8 +3,11 @@ Jarvis — Email Template
 =======================
 Renders Jarvis's emails (the morning brief and the weekly review) in the approved
 dark design (docs/brief_design.html) as email-safe HTML: tables, inline
-styles and bgcolor attributes, because Gmail strips <style> blocks and most
-layout CSS. Also returns a plain-text version for the text/plain part.
+styles and bgcolor attributes. Gmail's iOS/Android dark mode fully inverts
+those colours, so fills also carry a same-colour linear-gradient (inversion
+skips background-image) and text is wrapped for the Gmail-only blend-mode
+undo. The one <style> block is scoped with `u + .body` so other clients
+ignore it. Also returns a plain-text version for the text/plain part.
 
 render_sections() is the general renderer; render_brief() maps the brief's
 data onto it. Both take plain values only; every number is computed by the
@@ -40,13 +43,38 @@ def _e(text):
     return html.escape(str(text or ""))
 
 
+def _fill(colour):
+    """CSS background Gmail dark mode does not invert.
+
+    Inversion rewrites bgcolor and background-color and leaves
+    background-image alone, so a same-colour gradient keeps the fill.
+    """
+    return (f"background-color:{colour};"
+            f"background-image:linear-gradient({colour}, {colour});")
+
+
+def _blend(inner):
+    """Wrap text so Gmail dark mode keeps the authored colour.
+
+    Gmail rewrites the body into a div and inserts a <u> before it, so
+    `u + .body` matches only there. screen then difference against black
+    is a no-op until that black is inverted to white, which flips the
+    text a second time and restores it. Other clients never match the
+    selector, so the wrappers stay unstyled. Greys come back cleanly; a
+    saturated colour such as the miss red can drift a step because
+    Gmail's invert is not a pure channel flip.
+    """
+    return ('<div class="gmail-blend-screen"><div class="gmail-blend-difference">'
+            f'{inner}</div></div>')
+
+
 def _label(text):
     """Small grey uppercase section label with a hairline under it."""
     return (
         f'<tr><td style="padding:36px 0 0 0;">'
         f'<div style="font-family:{SANS};font-size:11px;font-weight:500;letter-spacing:1px;'
         f'text-transform:uppercase;color:{SUB};padding-bottom:10px;border-bottom:1px solid {LINE};">'
-        f'{_e(text)}</div></td></tr>'
+        f'{_blend(_e(text))}</div></td></tr>'
     )
 
 
@@ -69,32 +97,40 @@ def _text_cell(text, sub=None, miss=False):
     sub_html = (f'<div style="font-family:{SANS};font-size:13px;line-height:1.45;color:{SUB};'
                 f'padding-top:2px;">{_e(sub)}</div>') if sub else ""
     return (f'<td valign="top" style="font-family:{SANS};font-size:15px;line-height:1.45;'
-            f'color:{colour};">{_e(text)}{sub_html}</td>')
+            f'color:{colour};">{_blend(f"{_e(text)}{sub_html}")}</td>')
 
 
 def _right_cell(text, miss=False):
     colour = MISS if miss else SUB
     return (f'<td valign="top" align="right" style="font-family:{MONO};font-size:13px;'
-            f'color:{colour};white-space:nowrap;padding-left:16px;padding-top:1px;">{_e(text)}</td>')
+            f'color:{colour};white-space:nowrap;padding-left:16px;padding-top:1px;">'
+            f'{_blend(_e(text))}</td>')
 
 
 def _time_cell(text):
     return (f'<td valign="top" width="56" style="font-family:{MONO};font-size:13px;color:{SUB};'
-            f'width:56px;padding-top:1px;">{_e(text)}</td>')
+            f'width:56px;padding-top:1px;">{_blend(_e(text))}</td>')
+
+
+def _stat_cell(stat, width):
+    """One Yesterday tile: dark fill plus its value and label."""
+    value_colour = MISS if stat.get("miss") else INK
+    inner = (
+        f'<div style="font-family:{MONO};font-size:18px;line-height:1.1;font-weight:500;'
+        f'color:{value_colour};">{_e(stat["value"])}</div>'
+        f'<div style="font-family:{SANS};font-size:12px;color:{SUB};padding-top:4px;">'
+        f'{_e(stat["label"])}</div>'
+    )
+    return (
+        f'<td valign="top" width="{width}%" bgcolor="{BG}" style="{_fill(BG)}padding:14px 12px;'
+        f'border:1px solid {LINE};">{_blend(inner)}</td>'
+    )
 
 
 def _stats(stats):
     """The 'Yesterday' grid: up to four cells with hairline borders."""
     width = int(100 / max(1, len(stats)))
-    cells = "".join(
-        f'<td valign="top" width="{width}%" bgcolor="{BG}" style="background:{BG};padding:14px 12px;'
-        f'border:1px solid {LINE};">'
-        f'<div style="font-family:{MONO};font-size:18px;line-height:1.1;font-weight:500;'
-        f'color:{MISS if s.get("miss") else INK};">{_e(s["value"])}</div>'
-        f'<div style="font-family:{SANS};font-size:12px;color:{SUB};padding-top:4px;">{_e(s["label"])}</div>'
-        f'</td>'
-        for s in stats
-    )
+    cells = "".join(_stat_cell(s, width) for s in stats)
     return (f'<tr><td style="padding-top:14px;"><table role="presentation" width="100%" cellpadding="0" '
             f'cellspacing="0" border="0" style="border-collapse:collapse;"><tr>{cells}</tr></table></td></tr>')
 
@@ -102,18 +138,23 @@ def _stats(stats):
 def _page(title, body):
     """Wrap section rows in the outer dark email shell."""
     return f"""<!DOCTYPE html>
-<html lang="en" style="background:{OUTER};">
+<html lang="en" style="{_fill(OUTER)}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <meta name="supported-color-schemes" content="dark">
 <title>{_e(title)}</title>
+<style>
+:root {{ color-scheme: dark; }}
+u + .body .gmail-blend-screen {{ background:#000; mix-blend-mode:screen; }}
+u + .body .gmail-blend-difference {{ background:#000; mix-blend-mode:difference; }}
+</style>
 </head>
-<body bgcolor="{OUTER}" style="margin:0;padding:0;background:{OUTER};">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="{OUTER}" style="background:{OUTER};">
+<body class="body" bgcolor="{OUTER}" style="margin:0;padding:0;{_fill(OUTER)}">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="{OUTER}" style="{_fill(OUTER)}">
 <tr><td align="center" style="padding:24px 12px;">
-<table role="presentation" width="{WIDTH}" cellpadding="0" cellspacing="0" border="0" bgcolor="{BG}" style="width:100%;max-width:{WIDTH}px;background:{BG};">
+<table role="presentation" width="{WIDTH}" cellpadding="0" cellspacing="0" border="0" bgcolor="{BG}" style="width:100%;max-width:{WIDTH}px;{_fill(BG)}">
 <tr><td style="padding:40px 32px 32px 32px;">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
 {body}
@@ -135,18 +176,18 @@ def render_sections(title, meta, note, sections, footer):
     """
     parts = [
         f'<tr><td style="font-family:{SANS};font-size:26px;line-height:1.2;font-weight:600;'
-        f'letter-spacing:-0.5px;color:{INK};">{_e(title)}</td></tr>',
+        f'letter-spacing:-0.5px;color:{INK};">{_blend(_e(title))}</td></tr>',
         f'<tr><td style="font-family:{SANS};font-size:14px;color:{SUB};padding-top:6px;">'
-        f'{_e(meta)}</td></tr>',
+        f'{_blend(_e(meta))}</td></tr>',
     ]
     text = [title, meta or "", ""]
 
     if note:
         parts.append(
             f'<tr><td style="padding-top:28px;"><table role="presentation" cellpadding="0" cellspacing="0" '
-            f'border="0"><tr><td width="2" bgcolor="{INK}" style="background:{INK};width:2px;"></td>'
+            f'border="0"><tr><td width="2" bgcolor="{INK}" style="{_fill(INK)}width:2px;"></td>'
             f'<td style="padding-left:14px;font-family:{SANS};font-size:15px;line-height:1.6;color:{INK};">'
-            f'{_e(note)}</td></tr></table></td></tr>')
+            f'{_blend(_e(note))}</td></tr></table></td></tr>')
         text += [note, ""]
 
     for section in sections:
@@ -172,7 +213,7 @@ def render_sections(title, meta, note, sections, footer):
         text.append("")
 
     parts.append(f'<tr><td style="padding-top:40px;font-family:{SANS};font-size:12px;color:{SUB};">'
-                 f'{_e(footer)}</td></tr>')
+                 f'{_blend(_e(footer))}</td></tr>')
     text.append(footer or "")
     return _page(title, "".join(parts)), "\n".join(text).strip() + "\n"
 

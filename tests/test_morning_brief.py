@@ -215,5 +215,6 @@ def test_render_leaves_out_empty_sections_and_escapes():
     assert "Owed" not in page and "Due soon" not in page and "One push" not in page
     assert "Today" in page and "Yesterday" in page
     assert 'name="color-scheme" content="dark"' in page
-    assert "<style" not in page
+    assert "u + .body .gmail-blend-screen" in page
+    assert f"linear-gradient({email_template.OUTER}, {email_template.OUTER})" in page
     assert "TODAY\n  06:30  Pull" in text
