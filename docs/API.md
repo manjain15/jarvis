@@ -15,8 +15,9 @@ The agent API reuses existing code:
 - `GET /brief` returns the last morning brief or Sunday weekly review saved by
   those jobs.
 - `GET /finance` and the `/finance/*` routes read the existing finance code:
-  St. George spending (`finance_tracker`), savings against `exchange_target`
-  (`term_context` / `us_exchange`), recurring charges (`subscription_audit`),
+  St. George spending (`finance_tracker`), the savings goal against
+  `exchange_target` (`term_context` / `us_exchange`, every fund in
+  `breakdown`), recurring charges (`subscription_audit`),
   and reselling cashflow plus the sheet P&L (`analyse_reselling`,
   `reselling_tracker`). They do not return raw account numbers.
 - `POST /spend` calls `live_spend.log_spend` (the Back Tap path is unchanged).
@@ -280,10 +281,45 @@ curl -sS -H "Authorization: Bearer $JARVIS_API_TOKEN" \
 ```
 
 `exchange_target` is the goal block (`savings_goal`, `savings_deadline`,
-`weekly_budget`, `monthly_budget`, `monthly_income`). `balance` is the latest
-savings-CSV balance. `remaining`, `pct`, `on_track`, `projected_date`, and
-`monthly_savings` match `finance_tracker.analyse_savings`. The goal is still
-returned when the savings CSV is missing (`available: false`, `balance: 0`).
+`weekly_budget`, `monthly_budget`, `monthly_income`). `balance` is the total
+that counts toward that goal, and `remaining`, `pct`, `on_track`,
+`projected_date`, and `monthly_savings` use the same total
+(`finance_tracker.analyse_savings`).
+
+`breakdown` shows what went into the total. A null component was not read
+and is left out of the sums (it is not treated as $0).
+
+- `savings` — latest `finance/savings1.csv` balance.
+- `revolut_balance` — the reselling cashflow balance (`analyse_reselling`:
+  `finance/revolut.csv` when that file exists, otherwise `finance/investing.csv`).
+  `revolut_source` is `revolut`, `investing`, or `none`.
+- `friend_share` — `JARVIS_REVOLUT_FRIEND_SHARE` (dollars of that Revolut
+  balance held for someone else). Unset, blank, or not a number is 0, so
+  the whole Revolut balance counts until it is set. It is subtracted only
+  when `revolut_source` is `revolut` (`friend_share_applied`). His share
+  (`revolut_own`) is never negative.
+- `everyday` — latest `finance/everyday.csv` balance. Null when that
+  export is missing or unreadable, and then left out of the sums.
+- `stock`, `pending_shipping`, `deposits_paid` — reselling capital already
+  paid: in-stock cost, paid-pending-shipping cost, and `deposit_paid` on
+  deposit-paid rows. The unpaid deposit owing is not included. Every
+  category counts, including Membership. A sold membership stays in the
+  reselling P&L and is not capital still tied up.
+  `reselling.inventory.capital_pending` still counts the full cost of a
+  deposit-paid row when that cost is filled in; the goal does not.
+- `cash` — savings + `revolut_own` + everyday.
+- `capital` — stock + pending shipping + deposits paid. Null when the
+  reselling sheet could not be read.
+- `total` — cash + capital. This is `balance`.
+
+With the friend share set to 2000 and no everyday export, the 17 Oct 2026
+figures are savings 8233.35 + Revolut own 10277.84 (12277.84 − 2000) =
+cash 18511.19, plus stock 2015 + pending shipping 1261.98 + deposits paid
+400 = capital 3676.98, total 22188.17 (63.4% of 35000).
+
+The goal block is still returned when nothing could be read (`available:
+false`, `balance: 0`). `available` is true when the savings CSV exists or
+any other component was read.
 
 #### Subscriptions
 

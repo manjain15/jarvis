@@ -194,6 +194,41 @@ def load_items() -> list[Item]:
 
 # ── Analytics ─────────────────────────────────────────────────────────────────
 
+def paid_capital(items: list[Item]) -> dict:
+    """
+    Cash already spent on unsold reselling stock.
+
+    In-stock and paid-pending-shipping rows contribute their cost.
+    Deposit-paid rows contribute deposit_paid only — the unpaid
+    deposit_owing is still to be paid, so it is not capital yet.
+    capital_pending uses capital_committed, which takes the full cost
+    of a deposit-paid row whenever that cost is filled in, and that
+    overstates the cash that has left the account. Every category
+    counts, including Membership. Sold rows are left out: a sold
+    membership is a P&L cost, not capital still tied up.
+    """
+    stock = 0.0
+    pending_shipping = 0.0
+    deposits_paid = 0.0
+    for item in items:
+        status = (item.status or "").strip().lower()
+        if status == "in stock":
+            stock += item.cost or 0.0
+        elif status == "paid pending shipping":
+            pending_shipping += item.cost or 0.0
+        elif status == "deposit paid":
+            deposits_paid += item.deposit_paid or 0.0
+    stock = round(stock, 2)
+    pending_shipping = round(pending_shipping, 2)
+    deposits_paid = round(deposits_paid, 2)
+    return {
+        "stock": stock,
+        "pending_shipping": pending_shipping,
+        "deposits_paid": deposits_paid,
+        "total": round(stock + pending_shipping + deposits_paid, 2),
+    }
+
+
 def _is_flip(item: Item) -> bool:
     """Return whether a sold item is a flip for margin and best/worst.
 

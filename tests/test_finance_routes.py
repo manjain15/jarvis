@@ -48,6 +48,8 @@ def _patch_files(monkeypatch, tmp_path):
     monkeypatch.setattr(finance_tracker, "SAVINGS1_CSV", savings)
     monkeypatch.setattr(finance_tracker, "REVOLUT_CSV", tmp_path / "revolut.csv")
     monkeypatch.setattr(finance_tracker, "INVESTING_CSV", tmp_path / "investing.csv")
+    monkeypatch.setattr(finance_tracker, "load_paid_capital", lambda: None)
+    monkeypatch.delenv("JARVIS_REVOLUT_FRIEND_SHARE", raising=False)
     monkeypatch.setattr(term_context, "CONTEXT_FILE", tmp_path / "term_context.json")
     (tmp_path / "term_context.json").write_text(json.dumps({
         "us_exchange": {
@@ -153,6 +155,13 @@ def test_savings_against_exchange_target(tmp_path, monkeypatch):
     assert body["balance"] == 10000
     assert body["remaining"] == 25000
     assert body["pct"] == 28.6
+    assert body["breakdown"]["savings"] == 10000
+    assert body["breakdown"]["revolut_own"] is None
+    assert body["breakdown"]["everyday"] is None
+    assert body["breakdown"]["capital"] is None
+    assert body["breakdown"]["cash"] == 10000
+    assert body["breakdown"]["total"] == 10000
+    assert body["breakdown"]["friend_share"] == 0
     assert "savings_deadline" in body["exchange_target"]
     assert ACCOUNT not in text
     assert "savings1" not in text
@@ -289,9 +298,22 @@ def test_own_account_transfers_are_not_spending(tmp_path, monkeypatch):
     assert bundle.status_code == 200
     bundled = bundle.get_json()
     assert bundled["spending"]["total_spend"] == 305.25
-    assert bundled["savings"]["balance"] == 8000.0
+    # Everyday rows in this fixture carry a $1,000 balance, so the goal
+    # total is the $8,000 savings account plus that everyday balance.
+    assert bundled["savings"]["balance"] == 9000.0
+    assert bundled["savings"]["breakdown"]["savings"] == 8000.0
+    assert bundled["savings"]["breakdown"]["everyday"] == 1000.0
+    assert bundled["savings"]["breakdown"]["revolut_own"] is None
     assert bundled["savings"]["available"] is True
-    assert "revolut" not in bundle.get_data(as_text=True).lower()
+    # The savings breakdown names the Revolut component even when that
+    # balance was not read. Spending, subscriptions, and reselling must
+    # still not echo the card top-up.
+    elsewhere = json.dumps({
+        "spending": bundled["spending"],
+        "subscriptions": bundled["subscriptions"],
+        "reselling": bundled["reselling"],
+    }).lower()
+    assert "revolut" not in elsewhere
 
 
 def test_refund_reduces_spending_for_the_week(tmp_path, monkeypatch):

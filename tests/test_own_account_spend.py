@@ -257,6 +257,7 @@ def test_morning_brief_week_lists_genuine_categories_only(tmp_path, monkeypatch)
     monkeypatch.setattr(finance_tracker, "SAVINGS1_CSV", tmp_path / "savings1.csv")
     monkeypatch.setattr(finance_tracker, "REVOLUT_CSV", tmp_path / "revolut.csv")
     monkeypatch.setattr(finance_tracker, "INVESTING_CSV", tmp_path / "investing.csv")
+    monkeypatch.setattr(finance_tracker, "load_paid_capital", lambda: None)
     monkeypatch.setattr(finance_tracker, "LIVE_SPEND_AVAILABLE", False)
 
     class FrozenDateTime(datetime.datetime):
@@ -435,9 +436,14 @@ def test_refund_window_is_configurable(tmp_path):
 def test_savings_balance_is_unchanged_by_the_spend_filter(tmp_path, monkeypatch):
     savings = tmp_path / "savings1.csv"
     monkeypatch.setattr(finance_tracker, "SAVINGS1_CSV", savings)
+    monkeypatch.setattr(finance_tracker, "EVERYDAY_CSV", tmp_path / "everyday.csv")
+    monkeypatch.setattr(finance_tracker, "REVOLUT_CSV", tmp_path / "revolut.csv")
+    monkeypatch.setattr(finance_tracker, "INVESTING_CSV", tmp_path / "investing.csv")
+    monkeypatch.setattr(finance_tracker, "load_paid_capital", lambda: None)
     _write_stgeorge(savings, [
         ("28/09/2026", "Interest", "", "1.25"),
     ])
     result = finance_tracker.analyse_savings()
+    assert result["breakdown"]["savings"] == 1000.0
     assert result["total"] == 1000.0
     assert result["goal"] == 35000.0

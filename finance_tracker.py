@@ -32,6 +32,7 @@ UPDATE WEEKLY:
 import csv
 import datetime
 import json
+import os
 import re
 from pathlib import Path
 
@@ -638,24 +639,210 @@ def analyse_spending(transactions, days=7):
 
 
 # ── Savings progress ──────────────────────────────────────────────────────────
+# Dollars of the Revolut balance held for someone else. Unset, blank, or not
+# a number counts as 0 (the whole Revolut balance is his). Documented in
+# .env.example and docs/API.md.
+REVOLUT_FRIEND_SHARE_ENV = "JARVIS_REVOLUT_FRIEND_SHARE"
+
+
+def _money(value):
+    """Round a dollar amount to cents."""
+    return round(float(value), 2)
+
+
+def revolut_friend_share():
+    """
+    Dollars of the Revolut balance held for someone else.
+
+    Reads JARVIS_REVOLUT_FRIEND_SHARE. config loads .env at startup, so a
+    change applies on the next process start. Missing, blank, or non-numeric
+    values are 0. Negative values are 0.
+    """
+    raw = str(os.environ.get(REVOLUT_FRIEND_SHARE_ENV, "")).strip()
+    raw = raw.replace(",", "").replace("$", "")
+    if not raw:
+        return 0.0
+    try:
+        value = float(raw)
+    except ValueError:
+        return 0.0
+    if value < 0:
+        return 0.0
+    return _money(value)
+
+
+def build_savings_breakdown(savings_balance, revolut_balance, revolut_source,
+                            everyday_balance, capital, friend_share):
+    """
+    Add up every fund that counts toward the savings goal.
+
+    savings_balance, revolut_balance, and everyday_balance are dollar amounts
+    or None when that source was not read. capital is the dict from
+    reselling_tracker.paid_capital, or None when the sheet was not read.
+    friend_share is subtracted only when revolut_source is "revolut". His
+    Revolut share is never negative: a share larger than the balance counts
+    as zero of his own. A missing source is left out of the cash subtotal
+    and the total, rather than treated as a zero balance.
+    """
+    friend_share = _money(max(float(friend_share or 0), 0))
+    source = revolut_source or "none"
+    savings = None if savings_balance is None else _money(savings_balance)
+    revolut = None if revolut_balance is None else _money(revolut_balance)
+    everyday = None if everyday_balance is None else _money(everyday_balance)
+
+    applied = revolut is not None and source == "revolut"
+    if revolut is None:
+        revolut_own = None
+    elif applied:
+        revolut_own = _money(max(revolut - friend_share, 0))
+    else:
+        revolut_own = revolut
+
+    if capital is None:
+        stock = pending = deposits = capital_total = None
+    else:
+        stock = _money(capital.get("stock") or 0)
+        pending = _money(capital.get("pending_shipping") or 0)
+        deposits = _money(capital.get("deposits_paid") or 0)
+        capital_total = _money(stock + pending + deposits)
+
+    cash = _money(sum(
+        part for part in (savings, revolut_own, everyday) if part is not None
+    ))
+    total = _money(cash + (capital_total if capital_total is not None else 0))
+    return {
+        "savings": savings,
+        "revolut_balance": revolut,
+        "revolut_source": source,
+        "friend_share": friend_share,
+        "friend_share_applied": applied,
+        "revolut_own": revolut_own,
+        "everyday": everyday,
+        "stock": stock,
+        "pending_shipping": pending,
+        "deposits_paid": deposits,
+        "cash": cash,
+        "capital": capital_total,
+        "total": total,
+    }
+
+
+def _read_paid_capital():
+    """Load the reselling sheet and return cash already paid. Raises on failure."""
+    from reselling_tracker import load_items, paid_capital
+    return paid_capital(load_items())
+
+
+def load_paid_capital():
+    """
+    Cash already spent on unsold reselling stock, or None if the sheet
+    cannot be read. A failure leaves that component out of the goal.
+    """
+    try:
+        return _read_paid_capital()
+    except Exception as e:
+        print(f"⚠️  savings goal: reselling capital unavailable: {e}")
+        return None
+
+
+def _account_balance(path):
+    """Latest St. George balance, or None when the file is missing or empty."""
+    if path is None or not path.exists():
+        return None
+    try:
+        return get_latest_balance(path)
+    except Exception as e:
+        print(f"⚠️  savings goal: balance unavailable for {path.name}: {e}")
+        return None
+
+
+def _reselling_cash_balance():
+    """
+    Balance from analyse_reselling (Revolut CSV, otherwise the investing CSV).
+
+    Returns (balance or None, source). A read error is an absent balance.
+    """
+    try:
+        cash = analyse_reselling(days=1)
+    except Exception as e:
+        print(f"⚠️  savings goal: reselling cash balance unavailable: {e}")
+        return None, "none"
+    source = cash.get("source") or "none"
+    balance = cash.get("balance")
+    if balance is None:
+        return None, source
+    return balance, source
+
+
+def savings_breakdown_lines(breakdown):
+    """
+    Brief lines for each counted component, the cash subtotal, and capital
+    tied up. A source that was not read is left out of the text.
+    """
+    if not breakdown:
+        return []
+    lines = []
+    cash_bits = []
+    if breakdown.get("savings") is not None:
+        cash_bits.append(f"savings ${breakdown['savings']:,.2f}")
+    if breakdown.get("revolut_own") is not None:
+        bit = f"Revolut own ${breakdown['revolut_own']:,.2f}"
+        if breakdown.get("friend_share_applied") and breakdown.get("friend_share"):
+            bit += (
+                f" (balance ${breakdown['revolut_balance']:,.2f},"
+                f" less ${breakdown['friend_share']:,.2f} held for a friend)"
+            )
+        cash_bits.append(bit)
+    if breakdown.get("everyday") is not None:
+        cash_bits.append(f"everyday ${breakdown['everyday']:,.2f}")
+    if cash_bits:
+        lines.append(f"  Cash ${breakdown['cash']:,.2f}: " + ", ".join(cash_bits))
+    if breakdown.get("capital") is not None:
+        bits = []
+        if breakdown.get("stock") is not None:
+            bits.append(f"stock ${breakdown['stock']:,.2f}")
+        if breakdown.get("pending_shipping") is not None:
+            bits.append(f"pending shipping ${breakdown['pending_shipping']:,.2f}")
+        if breakdown.get("deposits_paid") is not None:
+            bits.append(f"deposits paid ${breakdown['deposits_paid']:,.2f}")
+        detail = f": {', '.join(bits)}" if bits else ""
+        lines.append(f"  Tied up ${breakdown['capital']:,.2f}{detail}")
+    return lines
+
 
 def analyse_savings():
     """
-    Reads main savings balance and calculates progress toward the savings goal
-    (see term_context.get_finance_goals()). Investing account is reselling
-    capital — tracked separately in analyse_reselling.
+    Progress toward the savings goal (term_context.get_finance_goals()).
+
+    The total is every fund he holds: the savings-account balance, his share
+    of the Revolut balance (the reselling cashflow balance minus
+    JARVIS_REVOLUT_FRIEND_SHARE), the St. George everyday balance when that
+    CSV is present, and reselling capital already paid (in-stock cost,
+    paid-pending-shipping cost, and deposits paid on deposit-paid rows).
+    A source that cannot be read is skipped. pct, remaining, on_track, and
+    projected_date all use that total. breakdown names each piece.
     """
     goals            = get_finance_goals()
     savings_goal     = goals["savings_goal"]
     savings_deadline = datetime.date.fromisoformat(goals["savings_deadline"])
 
-    bal1 = get_latest_balance(SAVINGS1_CSV)
+    bal1 = _account_balance(SAVINGS1_CSV)
+    revolut_balance, revolut_source = _reselling_cash_balance()
+    everyday = _account_balance(EVERYDAY_CSV)
+    breakdown = build_savings_breakdown(
+        bal1,
+        revolut_balance,
+        revolut_source,
+        everyday,
+        load_paid_capital(),
+        revolut_friend_share(),
+    )
 
-    total = bal1 or 0
-    remaining = max(0, savings_goal - total)
+    total = breakdown["total"]
+    remaining = _money(max(0, savings_goal - total))
     pct = (total / savings_goal * 100) if savings_goal > 0 else 0
 
-    # Project completion date based on current savings rate
+    # Project completion date based on the gap still left after every fund.
     today = datetime.datetime.now(TIMEZONE).date()
     days_to_deadline = (savings_deadline - today).days
 
@@ -676,6 +863,7 @@ def analyse_savings():
         "projected_date":  projected_date,
         "days_to_deadline": days_to_deadline,
         "monthly_savings": monthly_savings,
+        "breakdown":       breakdown,
     }
 
 
@@ -903,7 +1091,8 @@ def get_finance_summary():
         deadline_str = savings["deadline"].strftime("%B %Y")
         lines.append(f"SAVINGS GOAL (${savings['goal']:,.0f} by {deadline_str}):")
         lines.append(f"  [{bar}] {savings['pct']:.1f}%")
-        lines.append(f"  Current: ${savings['total']:,.2f}  |  Remaining: ${savings['remaining']:,.2f}")
+        lines.append(f"  Total: ${savings['total']:,.2f}  |  Remaining: ${savings['remaining']:,.2f}")
+        lines.extend(savings_breakdown_lines(savings.get("breakdown") or {}))
 
         if savings["on_track"]:
             lines.append(f"  ✓ On track — projected to hit goal {savings['projected_date'].strftime('%B %Y')}")

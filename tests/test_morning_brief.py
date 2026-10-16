@@ -81,7 +81,8 @@ def test_prompt_caps_sections_and_states_limits(monkeypatch):
     )
     assert "Z" * 4000 not in prompt
     assert "…(section shortened)" in prompt
-    assert "F" * 3000 not in prompt
+    finance_cap = morning_brief.PROMPT_SECTION_CAPS["finance"]
+    assert "F" * (finance_cap + 1) not in prompt
     assert "+4 more unread" in prompt
     assert "$75" in prompt
     assert "35,000" in prompt

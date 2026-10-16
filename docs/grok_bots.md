@@ -156,5 +156,10 @@ Routes: GET /finance and /finance/*, POST /spend, GET /flags, GET /today.
 - Weekly check: one GET /finance call. Don't poll.
 - Log a spend Manav tells you about with POST /spend
   {"amount", "category", "note"}.
-- Lead with spend versus the weekly budget and savings versus the goal.
+- Lead with spend versus the weekly budget and the savings goal.
+  savings.balance is every fund in savings.breakdown (savings account,
+  his Revolut share, everyday balance when that CSV is there, and
+  reselling capital already paid). pct, remaining, on_track and
+  projected_date use that total. breakdown.savings is the savings
+  account alone. A null component was not read.
 ```
