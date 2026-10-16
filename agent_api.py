@@ -1285,10 +1285,14 @@ def get_spending_payload(start, end):
 
 def get_savings_payload():
     """
-    Savings balance against exchange_target (term_context us_exchange goals).
+    Funds counted toward exchange_target (term_context us_exchange goals).
 
-    The goal figures are returned even when the savings CSV is missing.
-    Account numbers are not part of this payload.
+    balance, remaining, pct, on_track, and projected_date use breakdown.total:
+    the savings account, his Revolut share, the everyday balance when that
+    CSV exists, and reselling capital already paid. breakdown names each
+    component, the cash subtotal, and the total. The goal figures are still
+    returned when nothing could be read. Account numbers are not part of
+    this payload.
     """
     import finance_tracker
 
@@ -1300,8 +1304,13 @@ def get_savings_payload():
         projected = projected.date()
     if isinstance(deadline, datetime.datetime):
         deadline = deadline.date()
+    breakdown = savings.get("breakdown") or {}
+    other = any(
+        breakdown.get(key) is not None
+        for key in ("revolut_own", "everyday", "capital")
+    )
     return redact_account_numbers({
-        "available": finance_tracker.SAVINGS1_CSV.exists(),
+        "available": finance_tracker.SAVINGS1_CSV.exists() or other,
         "exchange_target": {
             "savings_goal": goals["savings_goal"],
             "savings_deadline": goals["savings_deadline"],
@@ -1316,6 +1325,7 @@ def get_savings_payload():
         "projected_date": projected.isoformat(),
         "days_to_deadline": savings["days_to_deadline"],
         "monthly_savings": round(savings["monthly_savings"], 2),
+        "breakdown": breakdown,
     })
 
 

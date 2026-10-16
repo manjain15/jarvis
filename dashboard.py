@@ -62,7 +62,7 @@ except Exception:
 try:
     from finance_tracker import (
         parse_stgeorge_csv, analyse_spending, analyse_savings,
-        EVERYDAY_CSV, SAVINGS1_CSV, INVESTING_CSV
+        savings_breakdown_lines, EVERYDAY_CSV, SAVINGS1_CSV, INVESTING_CSV
     )
     FINANCE_DETAIL = True
 except Exception:
@@ -268,6 +268,7 @@ def api_data():
                         "pct":        round(savings["pct"], 1),
                         "on_track":   savings["on_track"],
                         "projected":  savings["projected_date"].strftime("%B %Y"),
+                        "breakdown":  savings.get("breakdown"),
                     }
                 }
         except Exception as e:
@@ -604,6 +605,13 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
     margin-bottom: 4px;
   }
   .savings-goal { color: var(--muted); font-size: 12px; margin-bottom: 16px; }
+  .savings-split {
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.45;
+    margin-top: -8px;
+    margin-bottom: 14px;
+  }
 
   .progress-track {
     height: 6px;
@@ -775,6 +783,19 @@ function fmt(n) {
   return n?.toLocaleString("en-AU", {minimumFractionDigits:2, maximumFractionDigits:2}) ?? "—";
 }
 
+function savingsBreakdown(savings) {
+  const bd = savings.breakdown;
+  if (!bd) return "";
+  const bit = (label, value) => value == null ? "" : `${label} $${fmt(value)}`;
+  const cashParts = [bit("savings", bd.savings), bit("Revolut", bd.revolut_own), bit("everyday", bd.everyday)].filter(Boolean);
+  const tiedParts = [bit("stock", bd.stock), bit("shipping", bd.pending_shipping), bit("deposits", bd.deposits_paid)].filter(Boolean);
+  const lines = [];
+  if (bd.cash != null && cashParts.length) lines.push(`cash $${fmt(bd.cash)} · ${cashParts.join(" · ")}`);
+  if (bd.capital != null) lines.push(`tied up $${fmt(bd.capital)}${tiedParts.length ? " · " + tiedParts.join(" · ") : ""}`);
+  if (bd.friend_share_applied && bd.friend_share) lines.push(`Revolut excludes $${fmt(bd.friend_share)} held for a friend`);
+  return lines.length ? `<div class="savings-split">${lines.join("<br>")}</div>` : "";
+}
+
 function render(d) {
   const h = d.health || {};
   const w = d.workouts || {};
@@ -929,9 +950,10 @@ function render(d) {
 
     <!-- Savings -->
     <div class="card">
-      <div class="card-label">Savings — US exchange ${savings.deadline || ""}</div>
+      <div class="card-label">Savings goal — US exchange ${savings.deadline || ""}</div>
       <div class="savings-big">$${(savings.current || 0).toLocaleString("en-AU", {minimumFractionDigits:0, maximumFractionDigits:0})}</div>
       <div class="savings-goal">of $${(savings.goal || 0).toLocaleString("en-AU", {minimumFractionDigits:0, maximumFractionDigits:0})} goal · $${(savings.remaining || 0).toLocaleString("en-AU", {minimumFractionDigits:0, maximumFractionDigits:0})} remaining</div>
+      ${savingsBreakdown(savings)}
       <div class="progress-track">
         <div class="progress-fill" style="width:${Math.min(savingsPct,100)}%"></div>
       </div>
@@ -1049,11 +1071,16 @@ def ask():
         try:
             if EVERYDAY_CSV.exists():
                 savings = analyse_savings()
-                context_lines.append(
-                    f"Savings: ${savings['total']:,.2f} of ${savings['goal']:,.0f} goal "
+                goal_line = (
+                    f"Savings goal: ${savings['total']:,.2f} of ${savings['goal']:,.0f} "
                     f"({savings['pct']:.1f}%) — "
                     f"{'on track' if savings['on_track'] else 'behind schedule'}"
                 )
+                detail = [
+                    line.strip()
+                    for line in savings_breakdown_lines(savings.get("breakdown") or {})
+                ]
+                context_lines.append("\n".join([goal_line, *detail]))
         except Exception:
             pass
 

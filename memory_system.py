@@ -210,15 +210,20 @@ def load_todays_data():
 
     # Finance
     try:
-        from finance_tracker import parse_stgeorge_csv, analyse_savings, EVERYDAY_CSV
+        from finance_tracker import analyse_savings, savings_breakdown_lines, EVERYDAY_CSV
         if EVERYDAY_CSV.exists():
             savings = analyse_savings()
-            sections.append(
-                f"FINANCE:\n"
-                f"  Savings: ${savings['total']:,.2f} of ${savings['goal']:,.0f} "
-                f"({savings['pct']:.1f}%) — "
-                f"{'on track' if savings['on_track'] else 'behind — projected ' + savings['projected_date'].strftime('%B %Y')}"
+            status = (
+                "on track" if savings["on_track"]
+                else "behind — projected " + savings["projected_date"].strftime("%B %Y")
             )
+            finance_lines = [
+                "FINANCE:",
+                f"  Savings goal: ${savings['total']:,.2f} of ${savings['goal']:,.0f} "
+                f"({savings['pct']:.1f}%) — {status}",
+            ]
+            finance_lines.extend(savings_breakdown_lines(savings.get("breakdown") or {}))
+            sections.append("\n".join(finance_lines))
     except Exception:
         pass
 

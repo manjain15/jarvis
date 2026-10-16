@@ -193,6 +193,42 @@ def load_items() -> list[Item]:
 
 # ── Analytics ─────────────────────────────────────────────────────────────────
 
+def paid_capital(items: list[Item]) -> dict:
+    """
+    Cash already spent on unsold reselling stock.
+
+    In-stock and paid-pending-shipping rows contribute their cost.
+    Deposit-paid rows contribute deposit_paid only — the unpaid
+    deposit_owing is still to be paid, so it is not capital yet.
+    capital_pending uses capital_committed, which takes the full cost
+    of a deposit-paid row whenever that cost is filled in, and that
+    overstates the cash that has left the account. Sold rows and
+    membership rows are ignored.
+    """
+    stock = 0.0
+    pending_shipping = 0.0
+    deposits_paid = 0.0
+    for item in items:
+        if (item.category or "").strip().lower() in SKIP_CATEGORIES:
+            continue
+        status = (item.status or "").strip().lower()
+        if status == "in stock":
+            stock += item.cost or 0.0
+        elif status == "paid pending shipping":
+            pending_shipping += item.cost or 0.0
+        elif status == "deposit paid":
+            deposits_paid += item.deposit_paid or 0.0
+    stock = round(stock, 2)
+    pending_shipping = round(pending_shipping, 2)
+    deposits_paid = round(deposits_paid, 2)
+    return {
+        "stock": stock,
+        "pending_shipping": pending_shipping,
+        "deposits_paid": deposits_paid,
+        "total": round(stock + pending_shipping + deposits_paid, 2),
+    }
+
+
 def compute_summary(items: list[Item]) -> dict:
     sold    = [i for i in items if i.is_sold]
     stock   = [i for i in items if i.is_in_stock]

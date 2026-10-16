@@ -71,6 +71,14 @@ def test_money_rows():
                           "exchange_target": {"savings_goal": 35000}})
     assert rows[0] == {"text": "Spent this week", "right": "$92 / $75", "miss": True}
     assert rows[1]["right"] == "$21,000 / $35,000" and rows[1]["miss"] is False
+    assert rows[1]["text"] == "Savings goal"
+    split = wr.money_rows(
+        None,
+        {"available": True, "balance": 22188.17, "on_track": False,
+         "exchange_target": {"savings_goal": 35000},
+         "breakdown": {"cash": 18511.19, "capital": 3676.98}},
+    )
+    assert split[0]["sub"] == "behind · cash $18,511 + tied up $3,677"
     assert wr.money_rows({"available": False}, None) == []
 
 

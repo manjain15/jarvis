@@ -398,15 +398,15 @@ def fetch_emails(creds, hours_back=18, max_emails=15):
 NOTE_MAX_TOKENS = 400
 
 # Input pasted into the prompt. The model echoes what it is given, and the
-# finance block is kept long enough that the savings lines are not the part
-# that gets cut.
+# finance block is kept long enough that the savings-goal lines, including
+# the fund breakdown, are not the part that gets cut.
 PROMPT_SECTION_CAPS = {
     "profile": 3200,
     "calendar": 900,
     "emails": 1400,
     "checkin": 700,
     "fitbit": 700,
-    "finance": 2600,
+    "finance": 3000,
     "hevy": 700,
     "memory": 1000,
     "jobs": 700,

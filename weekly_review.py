@@ -215,7 +215,10 @@ def collect_finance_data(week_start, week_end):
     """Collects spending and savings data for the week."""
     lines = ["FINANCE DATA (past week):"]
     try:
-        from finance_tracker import parse_stgeorge_csv, analyse_spending, analyse_savings, EVERYDAY_CSV
+        from finance_tracker import (
+            parse_stgeorge_csv, analyse_spending, analyse_savings,
+            savings_breakdown_lines, EVERYDAY_CSV,
+        )
 
         if EVERYDAY_CSV.exists():
             from term_context import get_finance_goals
@@ -230,7 +233,11 @@ def collect_finance_data(week_start, week_end):
                 if amt > 0:
                     lines.append(f"  {cat}: ${amt:.2f}")
 
-            lines.append(f"\n  Savings: ${savings['total']:,.2f} of ${savings['goal']:,.0f} ({savings['pct']:.1f}%)")
+            lines.append(
+                f"\n  Savings goal: ${savings['total']:,.2f} of ${savings['goal']:,.0f} "
+                f"({savings['pct']:.1f}%)"
+            )
+            lines.extend(savings_breakdown_lines(savings.get("breakdown") or {}))
             deadline_str = savings['deadline'].strftime('%B %Y')
             lines.append(
                 f"  Projection: {savings['projected_date'].strftime('%B %Y')} "
@@ -469,7 +476,16 @@ def money_rows(spending, savings):
                      "miss": total > budget})
     if savings and savings.get("available"):
         goal = savings.get("exchange_target", {})
-        rows.append({"text": "Savings", "sub": "on track" if savings.get("on_track") else "behind",
+        sub = "on track" if savings.get("on_track") else "behind"
+        bd = savings.get("breakdown") or {}
+        parts = []
+        if bd.get("cash") is not None:
+            parts.append(f"cash ${bd['cash']:,.0f}")
+        if bd.get("capital") is not None:
+            parts.append(f"tied up ${bd['capital']:,.0f}")
+        if parts:
+            sub = f"{sub} · {' + '.join(parts)}"
+        rows.append({"text": "Savings goal", "sub": sub,
                      "right": f"${savings['balance']:,.0f} / ${goal.get('savings_goal', 0):,.0f}",
                      "miss": not savings.get("on_track")})
     return rows
