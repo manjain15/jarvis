@@ -1,6 +1,7 @@
 """Day plan: sizing, placement, gym slot, calendar writes, and block checks."""
 
 import datetime
+import json
 import os
 
 os.environ.setdefault("YOUR_EMAIL", "test@example.com")
@@ -570,7 +571,183 @@ def test_study_tasks_that_are_lecture_watching_are_replaced(monkeypatch):
     monkeypatch.setattr(day_plan.anthropic, "Anthropic", Client)
     placed = [("COMP3121", "study", at(9), at(10)), ("MATH2931", "study", at(10, 15), at(11, 15))]
     tasks = day_plan.write_tasks(placed, {"COMP3121": {"week": 5, "notes": []}, "MATH2931": {"week": 5, "notes": []}}, [])
-    assert tasks == ["W5 problems", "Finish Q5-6"]
+    assert tasks == ["COMP3121: W5 practice problems (60 min)", "Finish Q5-6"]
+
+
+# ── COMP practice vs notes review ────────────────────────────────────────────
+
+DP_NOTES = (
+    "Week 5 topics: Dynamic Programming I (overlapping subproblems); "
+    "Dynamic Programming II (making change, knapsack)"
+)
+PRACTICE = "COMP3121: W5 Dynamic Programming practice problems (60 min)"
+
+
+def _claude(monkeypatch, replies, seen=None):
+    """Stub the day-plan Claude call. replies is a list of task strings."""
+    monkeypatch.setattr(day_plan, "ANTHROPIC_AVAILABLE", True)
+    payload = json.dumps(replies)
+
+    class Msg:
+        content = [type("B", (), {"text": payload})()]
+
+    class Client:
+        def __init__(self, **kw):
+            self.messages = self
+
+        def create(self, **kw):
+            if seen is not None:
+                seen["prompt"] = kw["messages"][0]["content"]
+            return Msg()
+
+    monkeypatch.setattr(day_plan.anthropic, "Anthropic", Client)
+
+
+def test_fallback_comp_is_practice_and_other_courses_stay_notes():
+    placed = [
+        ("COMP3121", "study", at(9), at(10)),
+        ("MATH2931", "study", at(10, 15), at(11, 15)),
+        ("SCIF1000", "study", at(11, 30), at(12, 30)),
+        ("COMP3121", "lecture", at(14), at(15)),
+        ("COMP2511", "study", at(15, 15), at(16, 45)),
+    ]
+    context = {
+        "COMP3121": {"week": 5, "notes": [DP_NOTES]},
+        "MATH2931": {"week": 5, "notes": ["Week 5 topics: Categorical Features"]},
+        "SCIF1000": {"week": 5, "notes": ["Week 5 topics: Scientific method"]},
+        "COMP2511": {"week": 3, "notes": ["Week 3 topics: Design patterns I (intro)"]},
+    }
+    tasks = day_plan.write_tasks(placed, context, [], labels={3: "W5 lecture 1 (Mon 14:00)"})
+    assert tasks == [
+        PRACTICE,
+        "W5 problems",
+        "W5 problems",
+        "Watch W5 lecture 1 (Mon 14:00)",
+        "COMP2511: W3 Design patterns practice problems (90 min)",
+    ]
+
+
+def test_comp_due_assessment_still_wins_over_a_generic_problem_set():
+    context = {"COMP3121": {"week": 5, "notes": [
+        DP_NOTES, "Assignment 2 due Fri 16 Oct (3d, 20%)",
+    ]}}
+    tasks = day_plan.write_tasks([("COMP3121", "study", at(9), at(10))], context, [])
+    assert tasks == ["Assignment 2"]
+
+
+def test_comp_note_review_leftover_becomes_practice():
+    context = {"COMP3121": {"week": 5, "notes": [DP_NOTES]}}
+    placed = [("COMP3121", "study", at(9), at(10))]
+    review = [("COMP3121", "study", "Review W5 Dynamic Programming I notes", "partial")]
+    assert day_plan.write_tasks(placed, context, review) == [PRACTICE]
+    kept = [("COMP3121", "study", "Knapsack Q3-4", "partial")]
+    assert day_plan.write_tasks(placed, context, kept) == ["Finish: Knapsack Q3-4"]
+    math = [("MATH2931", "study", "Review W5 tutorial notes", "partial")]
+    assert day_plan.write_tasks(
+        [("MATH2931", "study", at(10), at(11))],
+        {"MATH2931": {"week": 5, "notes": ["Week 5 topics: Categorical Features"]}},
+        math,
+    ) == ["Finish: Review W5 tutorial notes"]
+
+
+def test_study_style_override_changes_the_task(monkeypatch):
+    monkeypatch.setattr(day_plan, "load_study_plan", lambda: {
+        **PLAN,
+        "study_styles": {"courses": {"COMP3121": "notes"}, "prefixes": {"MATH": "practice"}},
+    })
+    placed = [
+        ("COMP3121", "study", at(9), at(10)),
+        ("MATH2931", "study", at(10), at(11)),
+    ]
+    context = {
+        "COMP3121": {"week": 5, "notes": [DP_NOTES]},
+        "MATH2931": {"week": 5, "notes": ["Week 5 topics: Categorical Features"]},
+    }
+    assert day_plan.write_tasks(placed, context, []) == [
+        "W5 problems",
+        "MATH2931: W5 Categorical Features practice problems (60 min)",
+    ]
+
+
+@pytest.mark.parametrize("bad", [
+    "Read COMP3121 W5 notes: Dynamic Programming I and II",
+    "COMP3121: Review W5 Dynamic Programming I notes (60 min)",
+    "Review notes",
+    "Reading the W5 notes",
+    "Re-read W5 lecture notes",
+    "note review for DP",
+    "notes review",
+])
+def test_comp_study_note_review_is_rewritten(monkeypatch, bad):
+    _claude(monkeypatch, [bad])
+    tasks = day_plan.write_tasks(
+        [("COMP3121", "study", at(9), at(10))],
+        {"COMP3121": {"week": 5, "notes": [DP_NOTES]}},
+        [],
+    )
+    assert tasks == [PRACTICE]
+    assert not day_plan.is_note_review(tasks[0])
+
+
+@pytest.mark.parametrize("kept", [
+    "COMP3121: W5 Dynamic Programming practice problems (60 min)",
+    "COMP3121: W5 knapsack Q1-4 (60 min)",
+    "Assignment 2 Q1-3",
+    "Read the problem sheet",
+    "Review the tutorial problems",
+])
+def test_comp_study_practice_wording_is_kept(monkeypatch, kept):
+    _claude(monkeypatch, [kept])
+    tasks = day_plan.write_tasks(
+        [("COMP3121", "study", at(9), at(10))],
+        {"COMP3121": {"week": 5, "notes": [DP_NOTES]}},
+        [],
+    )
+    assert tasks == [kept]
+
+
+def test_note_review_rewrite_leaves_other_courses_and_lectures(monkeypatch):
+    seen = {}
+    _claude(monkeypatch, [
+        "Read COMP3121 W5 notes: Dynamic Programming I and II",
+        "COMP3121: Review W5 Dynamic Programming I notes (60 min)",
+        "Review W5 tutorial notes",
+        "Watch W5 lecture 1 + notes",
+    ], seen)
+    placed = [
+        ("COMP3121", "study", at(9), at(10)),
+        ("COMP2511", "study", at(10, 15), at(11, 15)),
+        ("MATH2931", "study", at(11, 30), at(12, 30)),
+        ("COMP3121", "lecture", at(14), at(15)),
+    ]
+    context = {
+        "COMP3121": {"week": 5, "notes": [DP_NOTES]},
+        "COMP2511": {"week": 5, "notes": []},
+        "MATH2931": {"week": 5, "notes": ["Week 5 topics: Categorical Features"]},
+    }
+    tasks = day_plan.write_tasks(placed, context, [], labels={3: "W5 lecture 1 (Mon 14:00)"})
+    assert tasks[0] == PRACTICE
+    assert tasks[1] == "COMP2511: W5 practice problems (60 min)"
+    assert tasks[2] == "Review W5 tutorial notes"
+    assert tasks[3] == "Watch W5 lecture 1 + notes"
+    prompt = seen["prompt"]
+    assert prompt.startswith("You write for Jarvis")
+    assert "study_style is practice (COMP2511, COMP3121)" in prompt
+    assert 'Do not write "review notes", "read notes"' in prompt
+    assert "study_style is notes (MATH2931)" in prompt
+    assert "W5 lecture 2 + notes" in prompt
+    assert '"study_style": "practice"' in prompt
+    assert '"study_style": "notes"' in prompt
+
+
+def test_comp_note_review_without_a_topic_is_still_practice(monkeypatch):
+    _claude(monkeypatch, ["Read COMP3121 W5 notes"])
+    tasks = day_plan.write_tasks(
+        [("COMP3121", "study", at(9), at(10))],
+        {"COMP3121": {"week": 5, "notes": []}},
+        [],
+    )
+    assert tasks == ["COMP3121: W5 practice problems (60 min)"]
 
 
 # ── Schedule changes and re-planning ─────────────────────────────────────────
