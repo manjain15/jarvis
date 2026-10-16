@@ -50,7 +50,10 @@ def store(tmp_path, monkeypatch):
     monkeypatch.setattr(day_plan, "_last_attempt", {})
     monkeypatch.setattr(day_plan, "area_pick", lambda date: None)  # area tests pass area_fn
     monkeypatch.setattr(day_plan, "timetable_lectures", fake_lectures)
+    import course_schedule
     import term_context
+    # Lecture labels read the term week from gitignored term_context.json.
+    monkeypatch.setattr(course_schedule, "_current_week", lambda: 5)
     monkeypatch.setattr(term_context, "get_workout_schedule", lambda: dict(term_context.DEFAULT_WORKOUT_SCHEDULE))
 
 
@@ -211,6 +214,58 @@ def test_build_writes_calendar_and_ledger():
     for i in items:
         assert datetime.datetime.fromisoformat(i["start"]) >= at(8, 5)
     assert [i["type"] for i in items][0] == "lecture"
+
+
+def test_build_plans_today_from_reconciled_step_debt(monkeypatch):
+    """A Health total that lands after close clears yesterday's debt before today is built."""
+    def _close(day):
+        day["closed"] = True
+        item = ledger.find_item(day, "steps")
+        item["count"] = 7_140
+        item["evidence"] = "shortcut"
+        day["debt"]["steps"] = 2_860
+        day["events"].append({"ts": "2026-10-13T21:00:00+11:00", "type": "steps", "value": 7_140})
+
+    ledger.update_day(TUESDAY, _close)
+    monkeypatch.setattr(ledger, "pull_health_steps", lambda date, max_age_s=0: 13_000)
+    day_plan.build_plan(now=at(5, 30, WEDNESDAY), busy_fn=lambda: [],
+                        tasks_fn=plain, calendar=FakeCalendar())
+    assert ledger.load_day(TUESDAY)["debt"]["steps"] == 0
+    assert ledger.find_item(ledger.load_day(TUESDAY), "steps")["count"] == 13_000
+    assert ledger.find_item(ledger.load_day(TUESDAY), "steps")["evidence"] == "shortcut+google_health"
+    assert ledger.find_item(ledger.load_day(WEDNESDAY), "steps")["target"] == 10_000
+
+
+def test_build_keeps_step_debt_when_health_is_missing(monkeypatch):
+    def _close(day):
+        day["closed"] = True
+        item = ledger.find_item(day, "steps")
+        item["count"] = 7_140
+        day["debt"]["steps"] = 2_860
+
+    ledger.update_day(TUESDAY, _close)
+    monkeypatch.setattr(ledger, "pull_health_steps", lambda date, max_age_s=0: None)
+    day_plan.build_plan(now=at(5, 30, WEDNESDAY), busy_fn=lambda: [],
+                        tasks_fn=plain, calendar=FakeCalendar())
+    assert ledger.load_day(TUESDAY)["debt"]["steps"] == 2_860
+    assert ledger.find_item(ledger.load_day(WEDNESDAY), "steps")["target"] == 12_860
+
+
+def test_build_survives_a_step_reconcile_failure(monkeypatch):
+    def boom(*args, **kwargs):
+        raise RuntimeError("health down")
+    monkeypatch.setattr(ledger, "reconcile_steps", boom)
+    items = day_plan.build_plan(now=at(5, 30), busy_fn=lambda: [], tasks_fn=plain, calendar=FakeCalendar())
+    assert items
+    assert ledger.load_day(TUESDAY)["planned"]
+
+
+def test_dry_run_does_not_reconcile_steps(monkeypatch):
+    called = []
+    monkeypatch.setattr(ledger, "reconcile_steps", lambda *a, **k: called.append(a))
+    day_plan.build_plan(now=at(5, 30), dry_run=True, busy_fn=lambda: [],
+                        tasks_fn=plain, calendar=FakeCalendar())
+    assert called == []
 
 
 def test_dry_run_writes_nothing():

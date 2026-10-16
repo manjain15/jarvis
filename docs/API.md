@@ -347,8 +347,10 @@ curl -sS -H "Authorization: Bearer $JARVIS_API_TOKEN" \
 
 The iOS Shortcuts send evidence here with the `phone` token. The event is
 stored in today's ledger with the server's time (Sydney). Repeats are safe:
-wake and gym arrival keep the first time, steps keep the highest count, and
-sleep keeps the latest report. Unknown fields are 400.
+wake and gym arrival keep the first time, steps keep the highest count
+(the shortcut reading or that day's Google Health total, whichever is
+higher), and sleep keeps the latest report. Unknown fields are 400. A Health
+failure leaves the shortcut count.
 
 | Body | Sent by |
 | --- | --- |
