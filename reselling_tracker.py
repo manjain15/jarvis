@@ -9,6 +9,9 @@ Columns (0-based, row 1 = headers skipped):
   I(8):Cost($) J(9):Sale Price($) K(10):Platform L(11):Fees($) M(12):Net P/L  N(13):% Margin  O(14):Notes
 
 Statuses: Sold, In Stock, Paid Pending Shipping, Deposit Paid
+
+Every category counts, including Membership (store memberships and bot
+subscriptions are real costs). A blank category is recorded as Other.
 """
 
 import gspread
@@ -39,7 +42,6 @@ COL_FEES          = 11  # L
 COL_NOTES         = 14  # O
 
 VALID_STATUSES = {"sold", "in stock", "paid pending shipping", "deposit paid"}
-SKIP_CATEGORIES = {"membership"}  # Don't include these in P&L
 
 # ── Data model ────────────────────────────────────────────────────────────────
 
@@ -146,9 +148,8 @@ def _parse_row(row: list) -> Optional[Item]:
     if not name or name == "-":
         return None
 
+    # Blank category falls back to Other. Membership is kept: it is a cost.
     category = get(COL_CATEGORY) or "Other"
-    if category.lower() in SKIP_CATEGORIES:
-        return None
 
     # Cost
     cost = _safe_float(get(COL_COST)) or 0.0
@@ -202,15 +203,14 @@ def paid_capital(items: list[Item]) -> dict:
     deposit_owing is still to be paid, so it is not capital yet.
     capital_pending uses capital_committed, which takes the full cost
     of a deposit-paid row whenever that cost is filled in, and that
-    overstates the cash that has left the account. Sold rows and
-    membership rows are ignored.
+    overstates the cash that has left the account. Every category
+    counts, including Membership. Sold rows are left out: a sold
+    membership is a P&L cost, not capital still tied up.
     """
     stock = 0.0
     pending_shipping = 0.0
     deposits_paid = 0.0
     for item in items:
-        if (item.category or "").strip().lower() in SKIP_CATEGORIES:
-            continue
         status = (item.status or "").strip().lower()
         if status == "in stock":
             stock += item.cost or 0.0
@@ -229,7 +229,19 @@ def paid_capital(items: list[Item]) -> dict:
     }
 
 
+def _is_flip(item: Item) -> bool:
+    """Return whether a sold item is a flip for margin and best/worst.
+
+    Memberships are sold at $0 with a positive cost (margin -100%). They
+    count in sold totals, COGS, net P/L, and the Membership category.
+    They are left out of average margin and best/worst so those stats
+    describe actual sales instead of the largest subscription.
+    """
+    return item.sale_price is not None and item.sale_price > 0
+
+
 def compute_summary(items: list[Item]) -> dict:
+    """P&L totals for the sheet. Every category, including Membership, counts."""
     sold    = [i for i in items if i.is_sold]
     stock   = [i for i in items if i.is_in_stock]
     pending = [i for i in items if i.is_pending]
@@ -252,13 +264,14 @@ def compute_summary(items: list[Item]) -> dict:
         by_cat[cat]["revenue"] += i.sale_price or 0.0
         by_cat[cat]["count"]   += 1
 
-    # Best and worst flips (by net profit)
-    profitable = sorted([i for i in sold if i.net_profit is not None], key=lambda x: x.net_profit or 0)
-    best  = profitable[-1] if profitable else None
-    worst = profitable[0]  if profitable else None
+    # Best and worst flips (by net profit). $0-sale costs are not flips.
+    flips = [i for i in sold if _is_flip(i)]
+    ranked = sorted([i for i in flips if i.net_profit is not None], key=lambda x: x.net_profit or 0)
+    best  = ranked[-1] if ranked else None
+    worst = ranked[0]  if ranked else None
 
-    # Average margin on sold items
-    margins = [i.margin_pct for i in sold if i.margin_pct is not None]
+    # Average margin on actual sales, not $0-sale costs such as memberships.
+    margins = [i.margin_pct for i in flips if i.margin_pct is not None]
     avg_margin = sum(margins) / len(margins) if margins else 0.0
 
     return {
@@ -306,7 +319,7 @@ def get_reselling_summary() -> str:
         f"RESELLING  {pl_emoji}  Net P/L: {pl_sign}${s['net_pl']:,.2f}",
         f"  Revenue: ${s['total_revenue']:,.2f}  |  COGS: ${s['total_cogs']:,.2f}  |  Fees: ${s['total_fees']:,.2f}",
         f"  Sold: {s['sold_count']}  |  In stock: {s['stock_count']}  |  Pending shipping: {s['pending_count']}",
-        f"  Avg margin on sold: {s['avg_margin_pct']:.1f}%",
+        f"  Avg margin on flips: {s['avg_margin_pct']:.1f}%",
     ]
 
     # Capital tied up

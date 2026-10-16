@@ -47,15 +47,34 @@ def test_paid_capital_counts_deposits_paid_not_full_cost():
     )
     stock = Item(status="in stock", category="Cards", name="Box", cost=2015, sale_price=None)
     sold = Item(status="sold", category="Cards", name="Gone", cost=50, sale_price=80)
-    member = Item(
-        status="deposit paid", category="Membership", name="Fee",
-        cost=100, sale_price=None, deposit_paid=100,
-    )
-    assert paid_capital([stock, shipping, deposit, sold, member]) == {
+    assert paid_capital([stock, shipping, deposit, sold]) == {
         "stock": 2015.0,
         "pending_shipping": 1261.98,
         "deposits_paid": 400.0,
         "total": 3676.98,
+    }
+
+
+def test_paid_capital_includes_unsold_membership():
+    """Membership is a real cost. Unsold rows count; a sold subscription does not."""
+    held = Item(
+        status="in stock", category="Membership", name="Store club",
+        cost=40, sale_price=None,
+    )
+    deposit = Item(
+        status="deposit paid", category="Membership", name="Fee",
+        cost=100, sale_price=None, deposit_paid=30, deposit_owing=70,
+    )
+    sold = Item(
+        status="sold", category="Membership", name="Bot sub",
+        cost=120, sale_price=0,
+    )
+    assert deposit.capital_committed == 100.0
+    assert paid_capital([held, deposit, sold]) == {
+        "stock": 40.0,
+        "pending_shipping": 0.0,
+        "deposits_paid": 30.0,
+        "total": 70.0,
     }
 
 

@@ -40,3 +40,11 @@ def test_send_message_drops_emoji_but_keeps_layout(monkeypatch):
     monkeypatch.setattr(jarvis_telegram, "_api", lambda method, params: sent.append(params["text"]))
     jarvis_telegram.send_message("🔥 Logged.\n  • 💪 Pull · 50 min\n\n✅ Done")
     assert sent == ["Logged.\n  • Pull · 50 min\n\nDone"]
+
+
+def test_errors_are_logged_without_the_bot_token(monkeypatch):
+    monkeypatch.setattr(jarvis_telegram.config, "TELEGRAM_BOT_TOKEN", "8605553805:AAHsecret")
+    err = ConnectionError("HTTPSConnectionPool(host='api.telegram.org', port=443): Max retries exceeded "
+                          "with url: /bot8605553805:AAHsecret/getUpdates?offset=1")
+    assert "AAHsecret" not in jarvis_telegram.redact(err)
+    assert "/bot<token>/getUpdates" in jarvis_telegram.redact(err)

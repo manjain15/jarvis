@@ -302,7 +302,9 @@ and is left out of the sums (it is not treated as $0).
   export is missing or unreadable, and then left out of the sums.
 - `stock`, `pending_shipping`, `deposits_paid` — reselling capital already
   paid: in-stock cost, paid-pending-shipping cost, and `deposit_paid` on
-  deposit-paid rows. The unpaid deposit owing is not included.
+  deposit-paid rows. The unpaid deposit owing is not included. Every
+  category counts, including Membership. A sold membership stays in the
+  reselling P&L and is not capital still tied up.
   `reselling.inventory.capital_pending` still counts the full cost of a
   deposit-paid row when that cost is filled in; the goal does not.
 - `cash` — savings + `revolut_own` + everyday.
@@ -346,8 +348,13 @@ curl -sS -H "Authorization: Bearer $JARVIS_API_TOKEN" \
 `cashflow` is `analyse_reselling`: `deployed`, `returned`, `net`, `balance`,
 `transaction_count`, and `source` (`revolut`, `investing`, or `none`).
 `inventory` is the sheet P&L (revenue, COGS, fees, `net_pl`, margin, capital
-tied up, category totals, best/worst flip). Item notes are not included. If
-the sheet cannot be read, `inventory` is `null` and `inventory_error` is
+tied up, category totals, best/worst flip). Sold rows in every category
+count, including Membership (store memberships and bot subscriptions). A
+blank category is reported as Other. Average margin and best/worst flip
+use sold rows with a sale price above zero, so a membership sold at $0
+(margin -100%) stays in the totals and the Membership category without
+becoming the worst flip. Item notes are not included. If the sheet
+cannot be read, `inventory` is `null` and `inventory_error` is
 `"reselling sheet unavailable"`; cashflow is still returned.
 
 ### Log a spend

@@ -12,6 +12,9 @@ CONFIG (term_context.json → "study_plan", see term_context.get_study_plan):
   routine           weekly commitments the calendar doesn't know (work, travel)
   daily_cap_hours   most study a given weekday can take
   ignore_busy       title words that don't block time (["Lecture"]: recordings)
+  study_styles      study-block wording (term_context.DEFAULT_STUDY_STYLES).
+                    COMP defaults to practice problems; other courses review notes.
+                    Lecture blocks ignore this.
 
 SIZING:
   remaining = weekly target + last week's lecture backlog − done this week
@@ -132,7 +135,7 @@ def assessment_boosts(date, courses):
 
 
 def course_context(date, courses):
-    """Per-course text for the task prompt: week topics and upcoming assessments."""
+    """Per-course text for the task prompt: week topics, assessments, study style."""
     out = {}
     try:
         import course_schedule
@@ -144,6 +147,12 @@ def course_context(date, courses):
         upcoming = _load_assessments(date)
     except Exception:
         upcoming = []
+    try:
+        from term_context import get_study_plan, study_style
+        plan = get_study_plan()
+        styles = {code: study_style(code, plan) for code in courses}
+    except Exception:
+        styles = {}
     for code in courses:
         lines = []
         if week:
@@ -158,7 +167,7 @@ def course_context(date, courses):
         for a in upcoming:
             if a["subject"] == code and 0 <= a["days_left"] <= 28:
                 lines.append(f"{a['name']} due {a['due']:%a %d %b} ({a['days_left']}d, {a.get('weight')}%)")
-        out[code] = {"week": week, "notes": lines}
+        out[code] = {"week": week, "notes": lines, "study_style": styles.get(code, "notes")}
     return out
 
 
@@ -615,8 +624,86 @@ def place_area_block(area, gaps, placed):
     return None
 
 
-def fallback_task(course, kind, context, carried):
-    """Plain task text when Claude isn't available."""
+def _styles_for(courses):
+    """Map each course to its study-block style. 'notes' if config can't be read."""
+    try:
+        from term_context import study_style
+        plan = load_study_plan()
+    except Exception:
+        return {c: "notes" for c in courses}
+    return {c: study_style(c, plan) for c in dict.fromkeys(courses)}
+
+
+_TOPIC_LINE = re.compile(r"topics:\s*(.+)", re.I)
+_PAREN = re.compile(r"\s*\([^)]*\)")
+_NUMERAL = re.compile(r"\s+(?:[IVX]+|\d+)(?:\s+and\s+(?:[IVX]+|\d+))?$", re.I)
+
+
+def _clean_topic(text):
+    """Drop parentheticals and a trailing part number from one topic string."""
+    text = _PAREN.sub(" ", text or "")
+    text = _NUMERAL.sub("", text.strip())
+    return re.sub(r"\s+", " ", text).strip(" .:-")
+
+
+def _topic_label(notes):
+    """Short topic for a practice task, from the first 'topics:' context line.
+
+    'Dynamic Programming I (…); Dynamic Programming II (…)' becomes
+    'Dynamic Programming'.
+    """
+    topics = []
+    for line in notes or []:
+        match = _TOPIC_LINE.search(line or "")
+        if not match:
+            continue
+        for part in match.group(1).split(";"):
+            cleaned = _clean_topic(part)
+            if cleaned:
+                topics.append(cleaned)
+        break
+    if not topics:
+        return ""
+    stem = topics[0]
+    for other in topics[1:]:
+        while stem and not other.startswith(stem):
+            stem = stem.rsplit(" ", 1)[0]
+    stem = stem.strip()
+    return stem if len(stem) >= 4 else topics[0]
+
+
+def practice_task(course, context, minutes=None):
+    """Practice-problem task for one study block. Lecture blocks do not use this."""
+    info = context.get(course) or {}
+    week = info.get("week")
+    topic = _topic_label(info.get("notes") or [])
+    bits = [f"{course}:"]
+    if week:
+        bits.append(f"W{week}")
+    if topic:
+        bits.append(topic)
+    bits.append("practice problems")
+    text = " ".join(bits)
+    suffix = f" ({int(minutes)} min)" if minutes else ""
+    if topic and len(text) + len(suffix) > 80:
+        text = " ".join(bit for bit in bits if bit != topic)
+    return (text + suffix)[:80]
+
+
+def fallback_task(course, kind, context, carried, minutes=None, style=None):
+    """Plain task text when Claude isn't available.
+
+    Practice-style courses (COMP by default) get practice problems on the
+    week's topic. Note-review leftovers are dropped for those courses.
+    Every other course keeps the previous wording. A due assessment still
+    wins over a generic problem set.
+    """
+    if style is None:
+        style = _styles_for([course]).get(course, "notes")
+    practice = kind == "study" and style == "practice"
+    if practice:
+        while carried and is_note_review(carried[0]):
+            carried.pop(0)
     if carried:
         return f"Finish: {carried.pop(0)}"
     week = (context.get(course) or {}).get("week")
@@ -625,10 +712,109 @@ def fallback_task(course, kind, context, carried):
         return f"{label} lectures"
     notes = (context.get(course) or {}).get("notes") or []
     due = [n for n in notes if " due " in n]
-    return due[0].split(" due ")[0] if due else f"{label} problems"
+    if due:
+        task = due[0].split(" due ")[0]
+        if not (practice and is_note_review(task)):
+            return task
+    if practice:
+        return practice_task(course, context, minutes)
+    return f"{label} problems"
 
 
 _LECTURE_WORDS = re.compile(r"\b(watch|lecture|lectures|recording|recordings)\b", re.I)
+# Reading or reviewing notes. "Read the problem sheet" does not match.
+_NOTE_REVIEW = re.compile(
+    r"\b(?:re-?read|reading|read|review(?:ing)?)\b(?:\W+\w+){0,12}\W+\bnotes?\b"
+    r"|\bnotes?\b(?:\W+\w+){0,8}\W+\b(?:re-?read|reading|read|review(?:ing)?)\b"
+    r"|\bnotes?[- ](?:reviews?|reading|read)\b",
+    re.I,
+)
+
+
+def is_note_review(task):
+    """True when task text is reading or reviewing notes."""
+    return bool(_NOTE_REVIEW.search(task or ""))
+
+
+def _guard_task(kind, task, fallback, style):
+    """Replace a bad study task with its plain fallback. Lecture text is kept.
+
+    Study blocks are never lecture-watching. Practice-style courses also
+    reject note-review wording; that fallback is a practice-problem task.
+    Model text we keep is capped at 80 characters. A fallback is not recut.
+    """
+    text = (task or "").strip()
+    if kind == "study" and (
+        _LECTURE_WORDS.search(text)
+        or (style == "practice" and is_note_review(text))
+    ):
+        return (fallback or "").strip()
+    return text[:80]
+
+
+def _task_prompt(placed, context, carry, labels, styles):
+    """The one Claude prompt that writes every block's task."""
+    lines = []
+    for i, (c, k, s, e) in enumerate(placed):
+        minutes = int((e - s).total_seconds() // 60)
+        kind = "lecture" if k == "lecture" else "study"
+        line = f"{i + 1}. {c} {kind} {s:%H:%M}–{e:%H:%M} ({minutes} min)"
+        if labels.get(i):
+            line += f", covers {labels[i]}"
+        if kind == "study":
+            line += f", study_style={styles.get(c, 'notes')}"
+        lines.append(line)
+    shown = {code: dict(info or {}) for code, info in (context or {}).items()}
+    for code, info in shown.items():
+        if code in styles:
+            info["study_style"] = styles[code]
+    for c, _k, _s, _e in placed:
+        shown.setdefault(c, {"study_style": styles.get(c, "notes")})
+    practice = sorted({c for c, k, _s, _e in placed
+                       if k == "study" and styles.get(c) == "practice"})
+    other = sorted({c for c, k, _s, _e in placed
+                    if k == "study" and styles.get(c) != "practice"})
+    rules = [
+        '- Each task fits its block\'s minutes. Specific and checkable: "Assignment 2 Q1-3", not "study".',
+        "- Unfinished tasks carried from yesterday go first, in the first block for that course.",
+        "- A due assessment comes before a generic problem set or note review.",
+        '- Lecture blocks are for watching the recorded lecture named in "covers" (it has already',
+        '  happened). "W5 lecture 2 + notes" is fine on a lecture block. Never a lecture that hasn\'t happened yet.',
+        "- A study block is never lecture-watching.",
+    ]
+    if practice:
+        sample = practice[0]
+        rules.append(
+            f"- Study blocks whose study_style is practice ({', '.join(practice)}) are practice "
+            f"questions or problems on that week's topic. "
+            f'Shape: "{sample}: W5 <topic> practice problems (60 min)". '
+            f'Do not write "review notes", "read notes", "reading notes", or any note-review task '
+            f"for these courses. If a carried task is note review, replace it with practice problems."
+        )
+    if other:
+        rules.append(
+            f"- Study blocks whose study_style is notes ({', '.join(other)}) review or read that "
+            f"week's notes, or do the set work (tutorial questions, an assignment)."
+        )
+    rules.append("- No emoji. Under 60 characters each.")
+    from voice import VOICE_RULES
+    return f"""{VOICE_RULES}
+
+Write one concrete task for each study block below.
+
+Rules:
+{chr(10).join(rules)}
+
+BLOCKS:
+{chr(10).join(lines)}
+
+COURSE CONTEXT:
+{json.dumps(shown, default=str)}
+
+CARRIED FROM YESTERDAY (course, type, task, status):
+{json.dumps(carry)}
+
+Return only a JSON array of {len(placed)} strings, in block order."""
 
 
 def write_tasks(placed, context, carry, labels=None):
@@ -637,47 +823,27 @@ def write_tasks(placed, context, carry, labels=None):
     carry is leftovers(date). labels maps a block index to the lecture it
     covers ("W5 lecture 1 (Tue 11:00)"). Returns a list of strings, same
     order as placed. A study task that turns out to be lecture-watching is
-    replaced with a plain study task.
+    replaced with a plain study task. A practice-style study task (COMP by
+    default) that reviews or reads notes is replaced with practice problems.
     """
     labels = labels or {}
+    styles = _styles_for([c for c, _k, _s, _e in placed])
     carried = {}
     for course, kind, task, _status in carry:
         carried.setdefault((course, kind), []).append(task)
     fallback = []
-    for i, (c, k, _s, _e) in enumerate(placed):
+    for i, (c, k, s, e) in enumerate(placed):
+        minutes = int((e - s).total_seconds() // 60)
         if k == "lecture" and labels.get(i) and not carried.get((c, k)):
             fallback.append(f"Watch {labels[i]}")
         else:
-            fallback.append(fallback_task(c, k, context, carried.setdefault((c, k), [])))
+            fallback.append(fallback_task(
+                c, k, context, carried.setdefault((c, k), []),
+                minutes=minutes, style=styles.get(c, "notes")))
     if not placed or not ANTHROPIC_AVAILABLE:
         return fallback
 
-    lines = [f"{i + 1}. {c} {'lecture' if k == 'lecture' else 'study'} "
-             f"{s:%H:%M}–{e:%H:%M} ({int((e - s).total_seconds() // 60)} min)"
-             + (f", covers {labels[i]}" if labels.get(i) else "")
-             for i, (c, k, s, e) in enumerate(placed)]
-    from voice import VOICE_RULES
-    prompt = f"""{VOICE_RULES}
-
-Write one concrete task for each study block below.
-
-Rules:
-- Each task fits its block's minutes. Specific and checkable: "Assignment 2 Q1-3", "W5 lecture 2 + notes", not "study".
-- Unfinished tasks carried from yesterday go first, in the first block for that course.
-- Lecture blocks are for watching the recorded lecture named in "covers" (it has already
-  happened). Never a lecture that hasn't happened yet.
-- No emoji. Under 60 characters each.
-
-BLOCKS:
-{chr(10).join(lines)}
-
-COURSE CONTEXT:
-{json.dumps(context, default=str)}
-
-CARRIED FROM YESTERDAY (course, type, task, status):
-{json.dumps(carry)}
-
-Return only a JSON array of {len(placed)} strings, in block order."""
+    prompt = _task_prompt(placed, context, carry, labels, styles)
     try:
         client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
         message = client.messages.create(
@@ -687,13 +853,8 @@ Return only a JSON array of {len(placed)} strings, in block order."""
         text = message.content[0].text.strip()
         tasks = json.loads(text[text.index("["):text.rindex("]") + 1])
         if len(tasks) == len(placed) and all(isinstance(t, str) and t.strip() for t in tasks):
-            out = []
-            for i, ((_c, k, _s, _e), task) in enumerate(zip(placed, tasks)):
-                task = task.strip()[:80]
-                if k == "study" and _LECTURE_WORDS.search(task):
-                    task = fallback[i]  # A study block is never lecture-watching.
-                out.append(task)
-            return out
+            return [_guard_task(k, task, fallback[i], styles.get(c, "notes"))
+                    for i, ((c, k, _s, _e), task) in enumerate(zip(placed, tasks))]
     except Exception as e:
         print(f"⚠️  day_plan: task writing failed, using plain tasks: {e}")
     return fallback

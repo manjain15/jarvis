@@ -247,17 +247,81 @@ def update_workout_schedule(schedule: dict):
 #   daily_cap_hours: {"Monday": 1.5, ...}
 #   ignore_busy: ["Lecture"]   title words that don't block study time
 #   weekly_checks: [{"id", "label", "day", "ask", "followup", "requires_class"}]
+#   study_styles: how a study block is worded (lecture blocks ignore this)
+#       default:  "notes" (review/read that week's notes) or "practice"
+#       courses:  exact code overrides, e.g. {"COMP3121": "notes"}
+#       prefixes: subject prefixes, longest match wins, e.g. {"COMP": "practice"}
+
+# COMP study is practice problems on the week's topic. Every other course
+# reviews notes. Override per course or prefix in term_context.json; a missing
+# study_styles section keeps these defaults (nothing has to be written to the file).
+DEFAULT_STUDY_STYLES = {
+    "default": "notes",
+    "courses": {},
+    "prefixes": {"COMP": "practice"},
+}
 
 DEFAULT_STUDY_PLAN = {
     "targets": {},
     "routine": {},
     "ignore_busy": [],
     "weekly_checks": [],
+    "study_styles": DEFAULT_STUDY_STYLES,
     "daily_cap_hours": {
         "Monday": 4, "Tuesday": 4, "Wednesday": 4, "Thursday": 4,
         "Friday": 4, "Saturday": 5, "Sunday": 5,
     },
 }
+
+
+def resolve_study_styles(stored=None) -> dict:
+    """Merge a stored study_styles object over DEFAULT_STUDY_STYLES.
+
+    Exact courses and prefixes are uppercased. Style names are lowercased.
+    An empty or partial stored object keeps the COMP practice default.
+    """
+    styles = {
+        "default": DEFAULT_STUDY_STYLES["default"],
+        "courses": dict(DEFAULT_STUDY_STYLES["courses"]),
+        "prefixes": dict(DEFAULT_STUDY_STYLES["prefixes"]),
+    }
+    raw = stored if isinstance(stored, dict) else {}
+    default = raw.get("default")
+    if isinstance(default, str) and default.strip():
+        styles["default"] = default.strip().lower()
+    for key in ("courses", "prefixes"):
+        extra = raw.get(key)
+        if not isinstance(extra, dict):
+            continue
+        for name, value in extra.items():
+            if isinstance(name, str) and isinstance(value, str) and name.strip() and value.strip():
+                styles[key][name.strip().upper()] = value.strip().lower()
+    return styles
+
+
+def study_style(course, plan=None) -> str:
+    """Study-block style for a course code: 'practice' or 'notes' (or a custom label).
+
+    Exact codes in study_styles.courses win, then the longest matching prefix,
+    then the default. A missing plan uses get_study_plan(); a plan with no
+    study_styles uses DEFAULT_STUDY_STYLES, so COMP courses are practice.
+    Lecture blocks do not consult this.
+    """
+    if plan is None:
+        styles = get_study_plan().get("study_styles") or DEFAULT_STUDY_STYLES
+    else:
+        styles = resolve_study_styles(plan.get("study_styles") if isinstance(plan, dict) else None)
+    code = re.sub(r"[^A-Z0-9]", "", str(course or "").upper())
+    courses = styles.get("courses") or {}
+    if code in courses:
+        return courses[code]
+    chosen = styles.get("default") or "notes"
+    best = ""
+    for prefix, value in (styles.get("prefixes") or {}).items():
+        name = str(prefix).upper()
+        if code.startswith(name) and len(name) > len(best):
+            best, chosen = name, value
+    return chosen
 
 
 def get_study_plan() -> dict:
@@ -267,6 +331,7 @@ def get_study_plan() -> dict:
     caps = dict(DEFAULT_STUDY_PLAN["daily_cap_hours"])
     caps.update(stored.get("daily_cap_hours") or {})
     plan["daily_cap_hours"] = caps
+    plan["study_styles"] = resolve_study_styles(stored.get("study_styles"))
     return plan
 
 
