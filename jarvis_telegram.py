@@ -128,6 +128,17 @@ def _api(method, params=None, timeout=35):
     return data["result"]
 
 
+def redact(error):
+    """
+    An error as text with the bot token removed. requests puts the full URL
+    (https://api.telegram.org/bot<token>/getUpdates) into connection errors,
+    which would otherwise land in the journal.
+    """
+    text = str(error)
+    token = config.TELEGRAM_BOT_TOKEN or ""
+    return text.replace(token, "<token>") if token else text
+
+
 def send_message(text, chat_id=None, parse_mode=None):
     """
     Public helper — any Jarvis script can `from jarvis_telegram import send_message`
@@ -1108,7 +1119,7 @@ def _enforcer_call(fn, *args):
     try:
         return fn(*args)
     except Exception as e:
-        print(f"⚠️  enforcer.{fn.__name__} failed: {e}")
+        print(f"⚠️  enforcer.{fn.__name__} failed: {redact(e)}")
         return None
 
 
@@ -1242,7 +1253,7 @@ def run_listener():
         except requests.exceptions.ReadTimeout:
             continue  # long-poll timeout — totally normal
         except Exception as e:
-            print(f"⚠️  Loop error: {e} — backing off 10s")
+            print(f"⚠️  Loop error: {redact(e)} — backing off 10s")
             time.sleep(10)
 
 
