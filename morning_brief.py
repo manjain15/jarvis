@@ -848,6 +848,21 @@ def due_rows(upcoming, limit=4):
     return rows
 
 
+def sync_yesterday_steps(yesterday, health_steps):
+    """
+    Write health_steps into yesterday's ledger so the brief and the ledger
+    show the same total. When yesterday is already closed, step debt is
+    recomputed and carried onto today. No ledger or no total: no change.
+    Never raises.
+    """
+    if not LEDGER_AVAILABLE or not health_steps:
+        return
+    try:
+        ledger.reconcile_steps(yesterday, health_count=health_steps, fetch=False)
+    except Exception as e:
+        print(f"⚠️   Couldn't reconcile yesterday's steps: {e}")
+
+
 def yesterday_stats(prev_day, sleep_hours=None, health_steps=None, weight=None, weight_delta=None):
     """The four Yesterday cells: gym, steps, sleep, weight."""
     gym = ledger.find_item(prev_day, "gym") if (LEDGER_AVAILABLE and prev_day) else None
@@ -1015,6 +1030,15 @@ def collect_brief_data(creds, now, note):
             pass
 
     sleep, health_steps = _health_yesterday(day, yesterday)
+    if prev is not None:
+        sync_yesterday_steps(yesterday, health_steps)
+        try:
+            prev = ledger.load_day(yesterday)
+            reloaded = ledger.load_day(today)
+            if reloaded is not None:
+                day = reloaded
+        except Exception as e:
+            print(f"⚠️   Ledger reload after step reconcile failed: {e}")
     weight, delta = _weight(yesterday)
     try:
         import enforcer

@@ -127,7 +127,14 @@ short version stays 35 min.
 
 An iOS Shortcut personal automation runs at 10:00, 13:00, 16:00, 19:00 and 21:00.
 It reads today's steps from Apple Health and sends `POST /events {"type":"steps","count":N}`.
-Google Health stays as the next-day check.
+The count Jarvis keeps is the higher of that shortcut reading and Google
+Health's daily total (Fitbit, which does not sync to Apple Health). Health is
+read when a shortcut reading lands, when a pace checkpoint is judged, and
+again before the day is graded. A failed or empty Health fetch leaves the
+shortcut count and logs a warning. The morning after, yesterday is reconciled
+once more before the day is planned and before the brief is rendered, so a
+total that lands overnight still clears the debt. Evidence on the steps item
+records the sources (`shortcut+google_health`).
 
 | Time | Pace |
 |---|---|
@@ -152,7 +159,16 @@ No Claude call.
   (daemon down) are skipped.
 
 At 23:00 the shortfall against the day's target becomes tomorrow's debt
-(cap +3,000). A day with no readings carries nothing.
+(cap +3,000), using the reconciled count. A day with no readings carries
+nothing.
+
+A closed day can be re-graded from Health without editing the ledger by hand:
+
+    python ledger.py --regrade-steps 2026-10-16
+
+That refetches the day's Health total, keeps the max, recomputes step debt,
+and recarries it onto the next day. Running it again is a no-op. It does not
+run on deploy.
 
 ## 7. Debt
 

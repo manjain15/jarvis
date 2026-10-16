@@ -716,6 +716,18 @@ def _kept(item, now):
     return item.get("status") != "pending" or bool(item.get("asked_at"))
 
 
+def _reconcile_yesterday_steps(date):
+    """
+    Fold Google Health into yesterday before today is built, so today's step
+    target carries the reconciled debt. A Health failure leaves yesterday as
+    it was and never blocks the plan.
+    """
+    try:
+        ledger.reconcile_steps(date - datetime.timedelta(days=1))
+    except Exception as e:
+        print(f"⚠️  day_plan: couldn't reconcile yesterday's steps: {e}")
+
+
 def build_plan(now=None, dry_run=False, busy_fn=None, tasks_fn=None, calendar=None, class_fn=None,
                area_fn=None, lectures_fn=None, replan=False):
     """
@@ -743,6 +755,7 @@ def build_plan(now=None, dry_run=False, busy_fn=None, tasks_fn=None, calendar=No
         day = ledger.load_day(date) or ledger.build_day(
             date, ledger.load_day(date - datetime.timedelta(days=1)))
     else:
+        _reconcile_yesterday_steps(date)
         day = ledger.get_or_create_day(date)
     replan = replan and bool(day.get("planned"))
     kept = [i for i in day.get("items", []) if replan and _kept(i, now)]

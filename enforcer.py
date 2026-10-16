@@ -41,10 +41,13 @@ DEBT (settled when the day closes, 23:00):
   make-up not done by its due date: +20 min on the next gym session, which
             stays until a session hits the longer target.
   steps     the shortfall against the day's target becomes tomorrow's step
-            debt (cap +3,000). No readings that day: no debt.
+            debt (cap +3,000). The count graded is max(shortcut, Google
+            Health). No readings that day: no debt. A Health failure keeps
+            the shortcut count.
 
 No Anthropic calls. Hevy is called at most every 30 min, and only after
-slot + 2h. Calendar and Google Health are read only when a skip needs it.
+slot + 2h. Calendar is read only when a skip needs it. Google Health is
+read for a skip's sleep check and once when the day closes, to grade steps.
 """
 
 import datetime
@@ -97,6 +100,15 @@ def workout_minutes(date):
         except Exception:
             continue
     return total
+
+
+def _health_steps(date):
+    """Google Health step total for date, or None. Never raises."""
+    try:
+        return ledger.pull_health_steps(date, max_age_s=0)
+    except Exception as e:
+        print(f"⚠️  Google Health steps unavailable for {date}: {e}")
+        return None
 
 
 def sleep_hours(day):
@@ -314,11 +326,12 @@ def _apply_workout(day, gym, minutes, now):
 
 # ── Day close and debt ───────────────────────────────────────────────────────
 
-def _settle(day, minutes, now):
+def _settle(day, minutes, now, health_steps=None):
     """
     Close a ledger: grade the gym item, settle make-ups, gym debt and step
     debt. minutes is the day's Hevy total (0 when Hevy wasn't needed).
-    Returns messages to send.
+    health_steps is that day's Google Health total, or None when Health
+    has no data. Returns messages to send.
     """
     out = []
     date = datetime.date.fromisoformat(day["date"])
@@ -375,28 +388,22 @@ def _settle(day, minutes, now):
             out.append(f"Make-up not done. +{EXPIRED_PENALTY} min on the next session "
                        "until it's hit.")
 
-    out += _settle_steps(day, debt)
+    out += _settle_steps(day, health_steps, now)
     day["closed"] = True
     _log(day, "closed", now, minutes=minutes)
     return out
 
 
-def _settle_steps(day, debt):
+def _settle_steps(day, health_steps=None, now=None):
     """
-    Tomorrow's step debt is today's shortfall (capped). A day with no
-    readings is unknown, not short, and carries nothing.
+    Tomorrow's step debt is today's shortfall (capped), taken from
+    max(shortcut, Google Health). A day with no readings is unknown, not
+    short, and carries nothing. A missing Health total leaves the shortcut
+    count to be graded as before.
     """
-    steps = ledger.find_item(day, "steps")
-    has_reading = any(e.get("type") == "steps" and (e.get("value") or 0) > 0
-                      for e in day.get("events", []))
-    if steps is None or not has_reading:
-        debt["steps"] = 0
-        return []
-    short = max(0, steps["target"] - steps["count"])
-    debt["steps"] = min(short, ledger.STEP_DEBT_CAP)
-    if not short:
-        return []
-    return [f"Steps {steps['count']:,} / {steps['target']:,}. +{debt['steps']:,} tomorrow."]
+    if health_steps:
+        ledger.apply_health_steps(day, health_steps, now)
+    return ledger.write_step_debt(day)
 
 
 def _needs_hevy(day):
@@ -415,7 +422,9 @@ def _close(date, now, fetch):
     minutes = fetch(date) if _needs_hevy(stored) else 0
     if minutes is None:
         return []  # Hevy unreachable. The next tick retries.
-    out = ledger.update_day(date, lambda day: [] if day.get("closed") else _settle(day, minutes, now))
+    health = _health_steps(date)
+    out = ledger.update_day(
+        date, lambda day: [] if day.get("closed") else _settle(day, minutes, now, health))
     # The next day may already exist (built before this close). Re-carry the debt.
     following = date + datetime.timedelta(days=1)
     if ledger.load_day(following) is not None:

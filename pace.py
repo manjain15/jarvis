@@ -2,8 +2,10 @@
 Jarvis — Step Pace
 ==================
 Nudges on Telegram when Manav is behind his step pace. Readings come from
-the iOS Shortcut (POST /events steps) into the ledger. The shortfall at day
-close becomes tomorrow's step debt (enforcer._settle). See docs/REWORK.md §6.
+the iOS Shortcut (POST /events steps) into the ledger. When a checkpoint is
+judged, Google Health's total for the day is folded in and the higher count
+is kept. The shortfall at day close becomes tomorrow's step debt
+(enforcer._settle). See docs/REWORK.md §6.
 
 CHECKPOINTS (share of the day's target, which includes step debt):
   10:00 25%   13:00 50%   16:00 70%   19:00 85%   21:00 100%
@@ -128,12 +130,43 @@ def _due(day, now):
     return result
 
 
+def _checkpoint_ready(day, now):
+    """True when this tick would judge or skip a checkpoint. Read-only."""
+    steps = ledger.find_item(day, "steps")
+    if steps is None or day.get("closed"):
+        return False
+    checked = (steps.get("pace") or {}).get("checked") or []
+    date = datetime.date.fromisoformat(day["date"])
+    for t, _share in CHECKPOINTS:
+        label = t.strftime("%H:%M")
+        cp = _at(date, t)
+        if label in checked or now < cp:
+            continue
+        if not _readings_since(day, cp) and now < cp + datetime.timedelta(minutes=WAIT_AFTER):
+            continue
+        return True
+    return False
+
+
+def _health_steps(date):
+    """Google Health steps for a pace check. Never raises. Cached briefly."""
+    try:
+        return ledger.pull_health_steps(date, max_age_s=15 * 60)
+    except Exception as e:
+        print(f"⚠️  pace: Google Health steps unavailable: {e}")
+        return None
+
+
 def tick(now=None, busy_fn=None):
     """Judge any checkpoint that's due. Returns messages to send."""
     now = now or ledger.now_local()
     busy_fn = busy_fn or busy_periods
+    preview = ledger.load_day(now.date())
+    health = _health_steps(now.date()) if preview and _checkpoint_ready(preview, now) else None
 
     def _check(day):
+        if health:
+            ledger.apply_health_steps(day, health, now)
         steps = ledger.find_item(day, "steps")
         if steps is None or day.get("closed"):
             return []
