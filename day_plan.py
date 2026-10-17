@@ -37,10 +37,13 @@ WEEKLY CHECKS: study_plan.weekly_checks adds small recurring yes/no tasks
 (SCIF1000 pre/post-class activities) with a follow-up if the answer is no.
 
 CHECKS: at a block's end, "MATH2931 · Assignment 2 Q1–3. Done? done / partial
-/ no". One question at a time. No reply in 60 min: no_reply. Anything not
-done rolls into tomorrow's tasks for that course.
+/ no". One question at a time. No reply in 60 min: no_reply. Replying to that
+Telegram message still logs the block after it expires. A late plain "done"
+with nothing open asks which question to reply to, and does not guess.
+Anything not done rolls into tomorrow's tasks for that course.
 
     python day_plan.py --dry-run     # print today's plan, write nothing
+    python day_plan.py --answer 2026-10-17 MATH2931 done --asked 13:00
 """
 
 import argparse
@@ -74,6 +77,8 @@ BOOST_CLOSE      = 2.0
 CLOSE_DAYS       = 3
 CHECK_WAIT_MIN   = 60
 CHECK_STALE_HRS  = 3
+ASK_LOOKBACK_DAYS = 2     # reply-to still hits today and the two days before
+LATE_HINT = "Nothing open. Reply to the question you're answering."
 MODEL            = "claude-sonnet-4-6"
 WEEKDAYS         = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
 DONE_WORDS       = {"done", "d", "yes", "y", "watched"}
@@ -1148,7 +1153,11 @@ def _due_at(item):
 
 
 def check_tick(now=None):
-    """Ask the next due block or weekly-check question. One question at a time."""
+    """Ask the next due block or weekly-check question. One question at a time.
+
+    The caller sends the returned text and stores Telegram's message id with
+    record_ask_message, so a later reply to that message can still log the item.
+    """
     now = now or ledger.now_local()
 
     def _check(day):
@@ -1178,60 +1187,357 @@ def check_tick(now=None):
     return [question] if question else []
 
 
-def handle_reply(text, now=None):
-    """Answer the outstanding question. Returns the reply, or None if there isn't one."""
-    now = now or ledger.now_local()
-    word = text.strip().lower().rstrip(".!")
+def _parse_status(text):
+    """Map a reply to done, partial or no. None when it isn't one of those words."""
+    word = (text or "").strip().lower().rstrip(".!")
     if word in DONE_WORDS:
-        status = "done"
-    elif word in PARTIAL_WORDS:
-        status = "partial"
-    elif word in NO_WORDS:
-        status = "no"
+        return "done"
+    if word in PARTIAL_WORDS:
+        return "partial"
+    if word in NO_WORDS:
+        return "no"
+    return None
+
+
+def _item_label(item):
+    """Short name for a check-in reply: the course, the check label, or the area title."""
+    if item.get("kind") == "area":
+        return item.get("title") or item.get("area") or "that block"
+    if item.get("kind") == "check":
+        return item.get("label") or "that check"
+    return item.get("course") or "that block"
+
+
+def _message_id(value):
+    """A Telegram message id as an int, or None when value isn't one."""
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _ask_ids(item):
+    """Telegram message ids that asked this item, oldest first."""
+    raw = item.get("ask_message_ids") or []
+    if not isinstance(raw, list):
+        raw = [raw]
+    values = list(raw)
+    if item.get("ask_message_id") is not None:
+        values.append(item.get("ask_message_id"))
+    ids = []
+    for value in values:
+        number = _message_id(value)
+        if number is not None and number not in ids:
+            ids.append(number)
+    return ids
+
+
+def _ask_dates(now):
+    """Today and the previous ASK_LOOKBACK_DAYS dates, newest first."""
+    return [now.date() - datetime.timedelta(days=i) for i in range(ASK_LOOKBACK_DAYS + 1)]
+
+
+def _clock(iso):
+    """HH:MM from an ISO timestamp, or None."""
+    if not iso or len(iso) < 16 or iso[10:11] != "T":
+        return None
+    return iso[11:16]
+
+
+def _clock_matches(item, hm):
+    """True when the item was asked at hm, or its block ends / check is due then."""
+    return any(_clock(item.get(field)) == hm for field in ("asked_at", "end", "ask_at"))
+
+
+def _resolved_status(item, status):
+    """Status to store. Weekly checks have no partial."""
+    if item.get("kind") == "check" and status == "partial":
+        return "no"
+    return status
+
+
+def _apply_status(item, status, now):
+    """Write the answer onto item. Returns (stored status, area name or None)."""
+    answered = _resolved_status(item, status)
+    item["status"] = answered
+    item["answered_at"] = now.isoformat(timespec="seconds")
+    area = item.get("area") if item.get("kind") == "area" and answered in ("done", "partial") else None
+    return answered, area
+
+
+def _touch_areas(names, now):
+    """Mark areas worked by a done or partial block. A failure is logged, not raised."""
+    for name in names:
+        try:
+            import areas
+            areas.mutate(lambda a, n=name: areas.touch(a, n, now.date(), "block"))
+        except Exception as e:
+            print(f"⚠️  day_plan: couldn't mark {name} touched: {e}")
+
+
+def _has_no_reply(day):
+    """True when a check-in today went unanswered."""
+    return any(
+        i.get("kind") in ("study", "check", "area") and i.get("status") == "no_reply"
+        for i in day.get("items", [])
+    )
+
+
+def _pending_reply(item, answered):
+    """Reply for the one question that is still open."""
+    if item["kind"] == "area" and answered != "done":
+        return "Logged. It stays the push until it moves."
+    if answered == "done":
+        return "Logged."
+    if item["kind"] == "check":
+        if item.get("followup_at") and not item.get("followup_sent"):
+            return f"Asking again at {item['followup_at'][11:16]}."
+        return "Logged as not done."
+    if answered == "partial":
+        return "Partial. The rest rolls to tomorrow."
+    return "Rolls to tomorrow."
+
+
+def _named_reply(item, answered, previous):
+    """Reply that names the item a Telegram reply-to just answered."""
+    name = _item_label(item)
+    if item["kind"] == "area" and answered != "done":
+        text = f"Logged {name}. It stays the push until it moves."
+    elif answered == "done":
+        text = f"Logged {name}."
+    elif item["kind"] == "check":
+        if item.get("followup_at") and not item.get("followup_sent"):
+            text = f"Logged {name}. Asking again at {item['followup_at'][11:16]}."
+        else:
+            text = f"Logged {name}. Not done."
+    elif answered == "partial":
+        text = f"Logged {name}. The rest rolls to tomorrow."
     else:
+        text = f"Logged {name}. Rolls to tomorrow."
+    if previous in ("done", "partial", "no") and previous != answered:
+        text += f" Was {previous}."
+    return text
+
+
+def record_ask_message(message_id, now=None):
+    """Store message_id on the check-in asked most recently today.
+
+    Follow-up asks keep every id in ask_message_ids and the latest in
+    ask_message_id. Returns the id stored, or None when it isn't a message id
+    or nothing has been asked.
+    """
+    message_id = _message_id(message_id)
+    if message_id is None:
+        return None
+    now = now or ledger.now_local()
+
+    def _stamp(day):
+        candidates = [
+            i for i in day.get("items", [])
+            if i.get("kind") in ("study", "check", "area") and i.get("asked_at")
+        ]
+        if not candidates:
+            print("⚠️  day_plan: no asked item to attach the Telegram message id to")
+            return None
+        item = max(candidates, key=lambda i: i["asked_at"])
+        ids = _ask_ids(item)
+        if message_id not in ids:
+            ids.append(message_id)
+        item["ask_message_ids"] = ids
+        item["ask_message_id"] = message_id
+        return message_id
+
+    return ledger.update_day(now.date(), _stamp)
+
+
+def handle_reply(text, now=None, *, late_hint=True):
+    """Answer the outstanding question. Returns the reply, or None if there isn't one.
+
+    A done/partial/no word with nothing open, when something went no_reply
+    today, returns a hint instead of guessing which block it was. Pass
+    late_hint False when the text was a reply to some other message.
+    """
+    now = now or ledger.now_local()
+    status = _parse_status(text)
+    if status is None:
         return None
 
     touched = []
 
     def _answer(day):
         for item in day.get("items", []):
-            if item.get("kind") not in ("study", "check", "area") or item["status"] != "pending" \
+            if item.get("kind") not in ("study", "check", "area") or item.get("status") != "pending" \
                     or not item.get("asked_at"):
                 continue
-            answered = status
-            if item["kind"] == "check" and status == "partial":
-                answered = "no"
-            item["status"] = answered
-            item["answered_at"] = now.isoformat(timespec="seconds")
-            if item["kind"] == "area" and answered in ("done", "partial"):
-                touched.append(item["area"])
-            if item["kind"] == "area" and answered != "done":
-                return "Logged. It stays the push until it moves."
-            if answered == "done":
-                return "Logged."
-            if item["kind"] == "check":
-                if item.get("followup_at") and not item.get("followup_sent"):
-                    return f"Asking again at {item['followup_at'][11:16]}."
-                return "Logged as not done."
-            if answered == "partial":
-                return "Partial. The rest rolls to tomorrow."
-            return "Rolls to tomorrow."
+            answered, area = _apply_status(item, status, now)
+            if area:
+                touched.append(area)
+            return _pending_reply(item, answered)
+        if late_hint and _has_no_reply(day):
+            return LATE_HINT
         return None
 
     reply = ledger.update_day(now.date(), _answer)
-    for name in touched:
-        try:
-            import areas
-            areas.mutate(lambda a, n=name: areas.touch(a, n, now.date(), "block"))
-        except Exception as e:
-            print(f"⚠️  day_plan: couldn't mark {name} touched: {e}")
+    _touch_areas(touched, now)
     return reply
 
 
-if __name__ == "__main__":
+def handle_reply_to(message_id, text, now=None):
+    """Answer the check-in message_id asked, even after it expired or was answered.
+
+    The last answer wins. Returns None when message_id isn't a check-in from
+    the last few days, or text isn't done/partial/no, so the caller falls through.
+    """
+    now = now or ledger.now_local()
+    status = _parse_status(text)
+    message_id = _message_id(message_id)
+    if status is None or message_id is None:
+        return None
+
+    found = None
+    for date in _ask_dates(now):
+        day = ledger.load_day(date)
+        if not day:
+            continue
+        for item in day.get("items", []):
+            if item.get("kind") in ("study", "check", "area") and message_id in _ask_ids(item):
+                found = (date, item.get("id"))
+                break
+        if found:
+            break
+    if not found:
+        return None
+
+    date, item_id = found
+    touched = []
+
+    def _answer(day):
+        item = None
+        for candidate in day.get("items", []):
+            if message_id in _ask_ids(candidate) and (item_id is None or candidate.get("id") == item_id):
+                item = candidate
+                break
+        if item is None:
+            return None
+        previous = item.get("status")
+        answered, area = _apply_status(item, status, now)
+        if area:
+            touched.append(area)
+        return _named_reply(item, answered, previous)
+
+    reply = ledger.update_day(date, _answer)
+    _touch_areas(touched, now)
+    return reply
+
+
+def _match_key(item, key):
+    """True when key is this item's id, course, label, title or area name."""
+    wanted = key.strip().lower()
+    fields = (item.get("id"), item.get("course"), item.get("label"), item.get("title"), item.get("area"))
+    return wanted in {str(field).strip().lower() for field in fields if field}
+
+
+def _select_matches(day, key, asked_hm):
+    """Items key could mean. One open asked item wins when several share a course."""
+    items = [i for i in day.get("items", []) if i.get("kind") in ("study", "check", "area")]
+    by_id = [i for i in items if str(i.get("id", "")).strip().lower() == key.strip().lower()]
+    matches = by_id or [i for i in items if _match_key(i, key)]
+    if asked_hm:
+        return [i for i in matches if _clock_matches(i, asked_hm)]
+    if len(matches) <= 1:
+        return matches
+    open_ones = [
+        i for i in matches
+        if i.get("status") in ("no_reply", "pending") and i.get("asked_at")
+    ]
+    if len(open_ones) == 1:
+        return open_ones
+    return matches
+
+
+def answer_item(date, key, status, now=None, asked_hm=None):
+    """Mark one study, check or area item. Idempotent when it already has that status.
+
+    key is an item id or a course code (also a check label or area title).
+    asked_hm (HH:MM) limits the match to an item asked or ending at that time.
+    Raises ValueError when the ledger, the word, or the item can't be resolved.
+    """
+    now = now or ledger.now_local()
+    parsed = _parse_status(status)
+    if parsed is None:
+        raise ValueError("Status must be done, partial or no.")
+    if asked_hm:
+        asked_hm = asked_hm.strip()
+        if _clock(f"2000-01-01T{asked_hm}") != asked_hm:
+            raise ValueError("Asked time must look like 13:00.")
+    day = ledger.load_day(date)
+    if day is None:
+        raise ValueError(f"No ledger for {date.isoformat()}.")
+    matches = _select_matches(day, key, asked_hm)
+    if not matches:
+        raise ValueError(f"No item matching {key!r} on {date.isoformat()}.")
+    if len(matches) > 1:
+        lines = [
+            f"{i.get('id')} {_item_label(i)} status={i.get('status')} asked={i.get('asked_at')} end={i.get('end')}"
+            for i in matches
+        ]
+        raise ValueError(
+            "Several items match. Re-run with the id or --asked HH:MM:\n" + "\n".join(lines)
+        )
+    item_id = matches[0].get("id")
+    touched = []
+
+    def _set(day):
+        item = None
+        for candidate in day.get("items", []):
+            if candidate.get("id") == item_id:
+                item = candidate
+                break
+        if item is None:
+            return None
+        target = _resolved_status(item, parsed)
+        if item.get("status") == target:
+            return f"Already {target}: {item_id} {_item_label(item)}."
+        previous = item.get("status")
+        answered, area = _apply_status(item, parsed, now)
+        if area:
+            touched.append(area)
+        return f"Set {item_id} {_item_label(item)} to {answered} (was {previous})."
+
+    reply = ledger.update_day(date, _set)
+    if reply is None:
+        raise ValueError(f"No item matching {key!r} on {date.isoformat()}.")
+    _touch_areas(touched, now)
+    return reply
+
+
+def main(argv=None):
+    """Print a dry-run plan, or mark one block's answer. A bad answer exits 1."""
+    try:
+        _main(argv)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from None
+
+
+def _main(argv=None):
+    """CLI body. Raises ValueError for a bad date or an item the answer can't resolve."""
     parser = argparse.ArgumentParser(description="Jarvis day plan")
     parser.add_argument("--dry-run", action="store_true", help="print today's plan, write nothing")
-    args = parser.parse_args()
+    parser.add_argument("--answer", nargs=3, metavar=("DATE", "ITEM", "STATUS"),
+                        help="mark a block: --answer 2026-10-17 MATH2931 done")
+    parser.add_argument("--asked", metavar="HH:MM",
+                        help="pick the item asked or ending at this time, e.g. 13:00")
+    args = parser.parse_args(argv)
+    if args.answer:
+        date_s, key, status = args.answer
+        try:
+            date = datetime.date.fromisoformat(date_s)
+        except ValueError:
+            raise ValueError(f"Bad date {date_s!r}. Use YYYY-MM-DD.") from None
+        print(answer_item(date, key, status, asked_hm=args.asked))
+        return
     # A dry run uses plain tasks, so it costs nothing.
     def plain(placed, context, carry, labels=None):
         """Plain tasks for a dry run, so it makes no Claude call."""
@@ -1243,3 +1549,7 @@ if __name__ == "__main__":
             ANTHROPIC_AVAILABLE = saved
     result = build_plan(dry_run=args.dry_run, tasks_fn=plain if args.dry_run else None)
     print(json.dumps(result, indent=2, default=str))
+
+
+if __name__ == "__main__":
+    main()

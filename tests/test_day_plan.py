@@ -800,6 +800,152 @@ def test_replan_keeps_done_blocks_and_replaces_only_future_events():
 
 
 
+SATURDAY = datetime.date(2026, 10, 17)
+
+
+def _study(date, item_id, course, status, asked=None, end=None, **extra):
+    """Append one study item. asked and end are datetimes."""
+    when = asked or at(12, 0, date)
+    item = {
+        "id": item_id, "kind": "study", "type": "lecture", "course": course,
+        "task": "task", "minutes": 60, "status": status,
+        "start": when.isoformat(), "end": (end or when).isoformat(),
+        "asked_at": asked.isoformat() if asked else None,
+    }
+    item.update(extra)
+    ledger.update_day(date, lambda d, item=item: d["items"].append(dict(item)))
+
+
+def test_reply_to_expired_item_logs_that_item():
+    _blocks(("MATH2931", "lecture", at(12), at(13)), ("COMP3121", "study", at(13), at(14)))
+    assert day_plan.check_tick(at(13, 0)) == ["MATH2931 · task 1. Watched? done / partial / no"]
+    assert day_plan.record_ask_message(101, now=at(13, 0)) == 101
+    assert day_plan.check_tick(at(14, 0)) == ["COMP3121 · task 2. Done? done / partial / no"]
+    assert day_plan.record_ask_message(202, now=at(14, 0)) == 202
+    # An hour after the second ask, both are no_reply. Replying to the first still logs it.
+    assert day_plan.check_tick(at(15, 10)) == []
+    assert day_plan.handle_reply_to(101, "done", now=at(15, 10)) == "Logged MATH2931."
+    items = [i for i in ledger.load_day(TUESDAY)["items"] if i.get("kind") == "study"]
+    assert items[0]["status"] == "done"
+    assert items[1]["status"] == "no_reply"
+
+
+def test_reply_to_the_open_question():
+    _blocks(("MATH2931", "lecture", at(12), at(13)))
+    day_plan.check_tick(at(13, 0))
+    day_plan.record_ask_message(55, now=at(13, 0))
+    assert day_plan.handle_reply_to(55, "Done.", now=at(13, 5)) == "Logged MATH2931."
+    assert ledger.load_day(TUESDAY)["items"][-1]["status"] == "done"
+
+
+def test_reply_to_unknown_or_non_answer_returns_none():
+    _blocks(("MATH2931", "lecture", at(12), at(13)))
+    day_plan.check_tick(at(13, 0))
+    day_plan.record_ask_message(55, now=at(13, 0))
+    assert day_plan.handle_reply_to(999, "done", now=at(13, 5)) is None
+    assert day_plan.handle_reply_to(55, "thanks", now=at(13, 5)) is None
+    assert ledger.load_day(TUESDAY)["items"][-1]["status"] == "pending"
+
+
+def test_reply_to_overwrites_an_answer_and_says_so():
+    _study(TUESDAY, "study-1", "MATH2931", "partial", asked=at(13, 0), ask_message_id=7, ask_message_ids=[7])
+    assert day_plan.handle_reply_to(7, "done", now=at(15, 10)) == "Logged MATH2931. Was partial."
+    assert day_plan.handle_reply_to(7, "done", now=at(15, 11)) == "Logged MATH2931."
+    assert ledger.load_day(TUESDAY)["items"][-1]["status"] == "done"
+
+
+def test_late_plain_done_hints_and_does_not_guess():
+    _study(TUESDAY, "study-2", "MATH2931", "no_reply", asked=at(13, 0), ask_message_id=7)
+    _study(TUESDAY, "study-3", "COMP3121", "no_reply", asked=at(14, 0), ask_message_id=8)
+    assert day_plan.handle_reply("done", now=at(15, 10)) == day_plan.LATE_HINT
+    assert day_plan.handle_reply("done", now=at(15, 10), late_hint=False) is None
+    assert day_plan.handle_reply("what's next", now=at(15, 10)) is None
+    statuses = [i["status"] for i in ledger.load_day(TUESDAY)["items"] if i.get("kind") == "study"]
+    assert statuses == ["no_reply", "no_reply"]
+
+
+def test_reply_to_reaches_back_two_days_only():
+    yesterday = TUESDAY - datetime.timedelta(days=1)
+    too_old = TUESDAY - datetime.timedelta(days=3)
+    _study(yesterday, "study-1", "MATH2931", "no_reply", asked=at(13, 0, yesterday), ask_message_id=1)
+    _study(too_old, "study-1", "COMP3121", "no_reply", asked=at(13, 0, too_old), ask_message_id=2)
+    assert day_plan.handle_reply_to(1, "done", now=at(9, 0)) == "Logged MATH2931."
+    assert day_plan.handle_reply_to(2, "done", now=at(9, 0)) is None
+    assert ledger.load_day(yesterday)["items"][-1]["status"] == "done"
+    assert ledger.load_day(too_old)["items"][-1]["status"] == "no_reply"
+
+
+def test_followup_keeps_every_ask_id(monkeypatch):
+    _thursday_checks(monkeypatch)
+    ledger.update_day(THURSDAY, lambda d: [x.update(status="done") for x in d["items"] if x.get("kind") == "study"])
+    day_plan.check_tick(at(11, 0, THURSDAY))
+    day_plan.record_ask_message(11, now=at(11, 0, THURSDAY))
+    day_plan.handle_reply("no", now=at(11, 1, THURSDAY))
+    day_plan.check_tick(at(12, 45, THURSDAY))
+    day_plan.record_ask_message(22, now=at(12, 45, THURSDAY))
+    item = _checks()[0]
+    assert item["ask_message_id"] == 22
+    assert item["ask_message_ids"] == [11, 22]
+    assert day_plan.handle_reply_to(11, "done", now=at(13, 0, THURSDAY)) == "Logged SCIF1000 pre-class activities."
+    assert _checks()[0]["status"] == "done"
+
+
+def test_reply_to_area_touches_the_area(monkeypatch, tmp_path):
+    import areas
+    monkeypatch.setattr(areas, "AREAS_FILE", tmp_path / "areas.json")
+    end = at(10, 0)
+    ledger.update_day(TUESDAY, lambda d: d["items"].append({
+        "id": "area-1", "kind": "area", "area": "project", "title": "Passion project",
+        "task": "Write the one-page concept", "minutes": 45, "status": "no_reply",
+        "start": at(9, 15).isoformat(), "end": end.isoformat(),
+        "asked_at": end.isoformat(), "ask_message_id": 15, "ask_message_ids": [15],
+    }))
+    reply = day_plan.handle_reply_to(15, "partial", now=end)
+    assert reply == "Logged Passion project. It stays the push until it moves."
+    assert areas.load()["project"]["last_touched"] == "2026-10-13"
+    assert ledger.load_day(TUESDAY)["items"][-1]["status"] == "partial"
+
+
+def test_record_ask_ignores_a_bool_and_stores_a_followup_list():
+    _blocks(("MATH2931", "lecture", at(8), at(9)))
+    day_plan.check_tick(at(9, 0))
+    assert day_plan.record_ask_message(True, now=at(9, 0)) is None
+    assert day_plan.record_ask_message(41, now=at(9, 0)) == 41
+    assert day_plan.record_ask_message(41, now=at(9, 1)) == 41
+    item = ledger.load_day(TUESDAY)["items"][-1]
+    assert item["ask_message_id"] == 41
+    assert item["ask_message_ids"] == [41]
+
+
+def test_answer_cli_marks_the_1300_item_and_is_idempotent(capsys):
+    _study(SATURDAY, "study-2", "MATH2931", "no_reply", asked=at(13, 0, SATURDAY), end=at(13, 0, SATURDAY))
+    _study(SATURDAY, "study-4", "MATH2931", "no_reply", asked=at(16, 0, SATURDAY), end=at(16, 0, SATURDAY))
+    with pytest.raises(SystemExit) as ambiguous:
+        day_plan.main(["--answer", "2026-10-17", "MATH2931", "done"])
+    assert "study-2" in str(ambiguous.value) and "study-4" in str(ambiguous.value)
+    math = [i for i in ledger.load_day(SATURDAY)["items"] if i.get("course") == "MATH2931"]
+    assert [i["status"] for i in math] == ["no_reply", "no_reply"]
+
+    day_plan.main(["--answer", "2026-10-17", "MATH2931", "done", "--asked", "13:00"])
+    assert "Set study-2 MATH2931 to done (was no_reply)." in capsys.readouterr().out
+    items = [i for i in ledger.load_day(SATURDAY)["items"] if i.get("course") == "MATH2931"]
+    assert items[0]["status"] == "done" and items[1]["status"] == "no_reply"
+    answered_at = items[0]["answered_at"]
+
+    day_plan.main(["--answer", "2026-10-17", "MATH2931", "done", "--asked", "13:00"])
+    assert "Already done: study-2 MATH2931." in capsys.readouterr().out
+    again = [i for i in ledger.load_day(SATURDAY)["items"] if i["id"] == "study-2"][0]
+    assert again["status"] == "done" and again["answered_at"] == answered_at
+
+
+def test_answer_cli_picks_the_one_open_item():
+    _study(SATURDAY, "study-2", "MATH2931", "no_reply", asked=at(13, 0, SATURDAY))
+    _study(SATURDAY, "study-5", "MATH2931", "pending")
+    assert "study-2" in day_plan.answer_item(SATURDAY, "MATH2931", "done", now=at(15, 10, SATURDAY))
+    items = {i["id"]: i["status"] for i in ledger.load_day(SATURDAY)["items"] if i.get("course") == "MATH2931"}
+    assert items == {"study-2": "done", "study-5": "pending"}
+
+
 def test_replan_drops_a_started_but_unanswered_block():
     cal = FakeCalendar()
     day_plan.build_plan(now=at(5, 30), busy_fn=lambda: [], tasks_fn=plain, calendar=cal)
