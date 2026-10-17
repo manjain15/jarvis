@@ -143,6 +143,9 @@ def send_message(text, chat_id=None, parse_mode=None):
     """
     Public helper — any Jarvis script can `from jarvis_telegram import send_message`
     and push a message to the user's Telegram.
+
+    Returns the message id of the last chunk when Telegram includes one, True
+    when the send succeeded without an id, or False when no chat is set.
     """
     if not chat_id:
         chat_id = config.TELEGRAM_CHAT_ID
@@ -151,12 +154,15 @@ def send_message(text, chat_id=None, parse_mode=None):
     text = drop_emoji(text)
     # Telegram caps messages at 4096 chars — chunk if needed
     chunks = [text[i:i + 4000] for i in range(0, len(text), 4000)] or [""]
+    last_id = None
     for chunk in chunks:
         params = {"chat_id": chat_id, "text": chunk}
         if parse_mode:
             params["parse_mode"] = parse_mode
-        _api("sendMessage", params)
-    return True
+        result = _api("sendMessage", params)
+        if isinstance(result, dict) and result.get("message_id") is not None:
+            last_id = result["message_id"]
+    return last_id if last_id is not None else True
 
 
 def get_updates(offset, long_poll=25):
@@ -579,6 +585,7 @@ def cmd_help(_args):
         "/remote project \"instruction\" [--pr] — start a headless remote-work session\n"
         "/remotestatus project — check the latest remote-work session\n"
         "/status — health-check the VPS daemons\n"
+        "Block check: reply done, partial or no to the question.\n"
         "(the evening check-in runs in the Grok coach bot at 21:00)\n"
         "\nAnything else → I respond conversationally."
     )
@@ -1114,10 +1121,10 @@ def maybe_autostart_checkin():
 # ── Gym enforcer glue ───────────────────────────────────────────────────────
 # Enforcer messages are not written to the conversation thread, like check-in turns.
 
-def _enforcer_call(fn, *args):
+def _enforcer_call(fn, *args, **kwargs):
     """Call an enforcer entry point. A failure is logged, never raised into the loop."""
     try:
-        return fn(*args)
+        return fn(*args, **kwargs)
     except Exception as e:
         print(f"⚠️  enforcer.{fn.__name__} failed: {redact(e)}")
         return None
@@ -1134,11 +1141,17 @@ def run_enforcer_tick():
         messages += _enforcer_call(enforcer.tick) or []
     if PACE_AVAILABLE:
         messages += _enforcer_call(pace.tick) or []
+    checks = []
     if DAY_PLAN_AVAILABLE and not CHECKIN["active"]:
-        messages += _enforcer_call(day_plan.check_tick) or []
+        checks = _enforcer_call(day_plan.check_tick) or []
     for text in messages:
         send_message(text)
         print(f"🏋️  → {text[:80]}")
+    for text in checks:
+        message_id = send_message(text)
+        print(f"🏋️  → {text[:80]}")
+        if DAY_PLAN_AVAILABLE:
+            _enforcer_call(day_plan.record_ask_message, message_id)
 
 
 # ── Main listener loop ──────────────────────────────────────────────────────
@@ -1187,8 +1200,16 @@ def handle_update(update, static_context_holder):
             return
 
     # ── Study block check: done / partial / no ──────────────────────────────
+    # A reply to the question logs that item, including after the 60 min expiry.
+    # Anything else falls through. A plain late answer does not guess the block.
     if DAY_PLAN_AVAILABLE:
-        reply = _enforcer_call(day_plan.handle_reply, text)
+        reply_to_id = (msg.get("reply_to_message") or {}).get("message_id")
+        if reply_to_id is not None:
+            reply = _enforcer_call(day_plan.handle_reply_to, reply_to_id, text)
+            if reply:
+                send_message(reply)
+                return
+        reply = _enforcer_call(day_plan.handle_reply, text, late_hint=reply_to_id is None)
         if reply:
             send_message(reply)
             return
